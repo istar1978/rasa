@@ -672,22 +672,30 @@ class EmbeddingIntentClassifier(Component):
         """Define loss"""
 
         # loss for maximizing similarity with correct action
-        loss = tf.maximum(0., self.mu_pos - sim[:, 0])
+        pos_loss = tf.maximum(0., self.mu_pos - sim[:, 0])
+        tf.summary.scalar('pos_action_loss',tf.reduce_mean(pos_loss))
+        loss = pos_loss
 
         sim_neg = sim[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs
         if self.use_max_sim_neg:
             # minimize only maximum similarity over incorrect actions
             max_sim_neg = tf.reduce_max(sim_neg, -1)
-            loss += tf.maximum(0., self.mu_neg + max_sim_neg)
+            neg_loss = tf.maximum(0., self.mu_neg + max_sim_neg)
+            tf.summary.scalar('neg_action_loss', tf.reduce_mean(neg_loss))
+            loss += neg_loss
         else:
             # minimize all similarities with incorrect actions
             max_margin = tf.maximum(0., self.mu_neg + sim_neg)
-            loss += tf.reduce_sum(max_margin, -1)
+            neg_loss = tf.reduce_sum(max_margin, -1)
+            tf.summary.scalar('neg_action_loss', tf.reduce_mean(neg_loss))
+            loss += neg_loss
 
         # penalize max similarity between intent embeddings
         sim_intent_emb += large_compatible_negative(bad_negs.dtype) * bad_negs
         max_sim_intent_emb = tf.maximum(0., tf.reduce_max(sim_intent_emb, -1))
-        loss += max_sim_intent_emb * self.C_emb
+        intent_loss = max_sim_intent_emb * self.C_emb
+        tf.summary.scalar('intent_loss', tf.reduce_mean(intent_loss))
+        loss += intent_loss
 
         # penalize max similarity between input embeddings
 
@@ -695,10 +703,15 @@ class EmbeddingIntentClassifier(Component):
                                 lambda: sim_input_emb + large_compatible_negative(bad_negs.dtype) * bad_negs)
         # sim_input_emb += large_compatible_negative(bad_negs.dtype) * bad_negs
         max_sim_input_emb = tf.maximum(0., tf.reduce_max(sim_input_emb, -1))
-        loss += max_sim_input_emb * self.C_emb
+        text_emb_loss = max_sim_input_emb * self.C_emb
+        tf.summary.scalar('text_emb_loss',tf.reduce_mean(text_emb_loss))
+        loss += text_emb_loss
 
         # average the loss over the batch and add regularization losses
-        loss = tf.reduce_mean(loss) + tf.losses.get_regularization_loss()
+        reg_loss = tf.losses.get_regularization_loss()
+        tf.summary.scalar('reg_loss', reg_loss)
+        loss = tf.reduce_mean(loss) + reg_loss
+
         return loss
 
     def _tf_loss_softmax(self, sim: 'tf.Tensor', sim_intent_emb: 'tf.Tensor', sim_input_emb: 'tf.Tensor', bad_negs) -> 'tf.Tensor':
@@ -880,7 +893,7 @@ class EmbeddingIntentClassifier(Component):
 
             self.acc_op = self.tf_acc_op(self.sim_op, is_training)
 
-            tf.summary.scalar('loss',loss)
+            tf.summary.scalar('total loss',loss)
             tf.summary.scalar('accuracy',self.acc_op)
 
             train_op = tf.train.AdamOptimizer().minimize(loss)
