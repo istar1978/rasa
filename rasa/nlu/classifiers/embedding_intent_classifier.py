@@ -734,10 +734,11 @@ class EmbeddingIntentClassifier(Component):
 
     def tf_acc_op(self,sim_mat,is_training):
 
-        max_sim_id = tf.reduce_max(sim_mat,axis=-1)
-        acc_op = tf.cond(is_training, lambda: tf.reduce_mean(tf.cast(tf.math.equal(max_sim_id,tf.zeros_like(max_sim_id)),
+        max_sim_id = tf.math.argmax(sim_mat,axis=-1)
+        max_sim = tf.reduce_max(sim_mat, axis=-1)
+        acc_op = tf.cond(is_training, lambda: tf.reduce_mean(tf.cast(tf.math.equal(max_sim_id, tf.zeros_like(max_sim_id)),
                                                                      dtype=tf.float32)),
-                         lambda: tf.reduce_mean(tf.cast(tf.math.equal(max_sim_id, tf.linalg.tensor_diag_part(sim_mat)),
+                         lambda: tf.reduce_mean(tf.cast(tf.math.equal(max_sim, tf.linalg.tensor_diag_part(sim_mat)),
                                                                      dtype=tf.float32)))
 
         return acc_op
@@ -875,13 +876,13 @@ class EmbeddingIntentClassifier(Component):
             self.word_embed = self._create_tf_embed_a(self.a_raw, is_training)
             self.intent_embed = self._create_tf_embed_b(self.b_raw, is_training)
 
-            neg_ids = tf.random.categorical(tf.log(1. - tf.eye(tf.shape(self.b_raw)[0])), self.num_neg)
+            self.neg_ids = tf.random.categorical(tf.log(1. - tf.eye(tf.shape(self.b_raw)[0])), self.num_neg)
 
-            iou_intent = self._tf_calc_iou(self.b_raw, is_training, neg_ids)
+            iou_intent = self._tf_calc_iou(self.b_raw, is_training, self.neg_ids)
             self.bad_negs = 1. - tf.nn.relu(tf.sign(self.iou_threshold - iou_intent))
 
-            self.tiled_word_embed = self._tf_sample_neg(self.word_embed, is_training, neg_ids, first_only=True)
-            self.tiled_intent_embed = self._tf_sample_neg(self.intent_embed, is_training, neg_ids)
+            self.tiled_word_embed = self._tf_sample_neg(self.word_embed, is_training, self.neg_ids, first_only=True)
+            self.tiled_intent_embed = self._tf_sample_neg(self.intent_embed, is_training, self.neg_ids)
 
             self.sim_op, self.sim_intent_emb, self.sim_input_emb = self._tf_sim(self.tiled_word_embed, self.tiled_intent_embed)
             if self.loss_type == 'margin':
@@ -975,17 +976,22 @@ class EmbeddingIntentClassifier(Component):
             while True:
                 try:
 
-                    fetch_list = (self.a_raw, self.b_raw, self.intent_embed, self.word_embed,
-                                                                        self.tiled_intent_embed, self.tiled_word_embed,
-                                                                        self.sim_op, self.bad_negs, self.sim_input_emb,
-                                                                        self.sim_intent_emb,
+                    fetch_list = (self.a_raw, self.b_raw, self.word_embed, self.intent_embed,
+                                                                        self.tiled_word_embed, self.tiled_intent_embed,
+                                                                        self.sim_op, self.sim_input_emb,
+                                                                        self.sim_intent_emb, self.bad_negs, self.neg_ids,
                                                                         train_op, loss, self.acc_op,
                                                                         self.summary_merged_op)
 
                     return_vals = self.session.run(fetch_list, feed_dict={is_training: True})
 
+                    # for i in range(11):
+                    #     print(return_vals[i].shape)
+
                     batch_loss = return_vals[-3]
                     batch_acc = return_vals[-2]
+
+                    # print(batch_acc)
 
                     train_tb_writer.add_summary(return_vals[-1], iter_num)
 
@@ -1018,9 +1024,10 @@ class EmbeddingIntentClassifier(Component):
 
                         try:
 
-                            fetch_list = (self.a_raw, self.b_raw, self.intent_embed, self.word_embed,
-                                                                        self.tiled_intent_embed, self.tiled_word_embed,
-                                                                        self.sim_op, self.bad_negs,self.sim_input_emb,
+                            fetch_list = (self.a_raw, self.b_raw, self.word_embed, self.intent_embed,
+                                                                        self.tiled_word_embed, self.tiled_intent_embed,
+                                                                        self.sim_op, self.sim_input_emb,
+                                                                        self.sim_intent_emb, self.bad_negs, self.neg_ids,
                                                                         self.sim_intent_emb,
                                                                         loss, self.acc_op, self.summary_merged_op)
 
@@ -1034,6 +1041,10 @@ class EmbeddingIntentClassifier(Component):
 
                         except tf.errors.OutOfRangeError:
                             break
+
+                        # print('Validation run')
+                        # for i in range(11):
+                        #     print(return_vals[i].shape)
 
                         ep_val_loss += batch_loss
                         ep_val_acc += batch_acc
