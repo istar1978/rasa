@@ -668,15 +668,16 @@ class EmbeddingIntentClassifier(Component):
                              "should be 'cosine' or 'inner'"
                              "".format(self.similarity_type))
 
-    def _tf_loss_margin(self, sim: 'tf.Tensor', sim_intent_emb: 'tf.Tensor', sim_input_emb: 'tf.Tensor', bad_negs) -> 'tf.Tensor':
+    def _tf_loss_margin(self, sim: 'tf.Tensor', sim_intent_emb: 'tf.Tensor', sim_input_emb: 'tf.Tensor', bad_negs, is_training: 'tf.Tensor') -> 'tf.Tensor':
         """Define loss"""
 
         # loss for maximizing similarity with correct action
-        pos_loss = tf.maximum(0., self.mu_pos - sim[:, 0])
+        pos_sims = tf.cond(is_training, lambda: sim[:,0], lambda: tf.linalg.tensor_diag_part(sim))
+        pos_loss = tf.maximum(0., self.mu_pos - pos_sims)
         tf.summary.scalar('pos_action_loss',tf.reduce_mean(pos_loss))
         loss = pos_loss
 
-        sim_neg = sim[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs
+        sim_neg = tf.cond(is_training, lambda: sim[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs, lambda: tf.linalg.set_diag(sim, tf.zeros([tf.shape(sim)[0]],tf.float32)))
         if self.use_max_sim_neg:
             # minimize only maximum similarity over incorrect actions
             max_sim_neg = tf.reduce_max(sim_neg, -1)
@@ -886,7 +887,7 @@ class EmbeddingIntentClassifier(Component):
 
             self.sim_op, self.sim_intent_emb, self.sim_input_emb = self._tf_sim(self.tiled_word_embed, self.tiled_intent_embed)
             if self.loss_type == 'margin':
-                loss = self._tf_loss_margin(self.sim_op, self.sim_intent_emb, self.sim_input_emb, self.bad_negs)
+                loss = self._tf_loss_margin(self.sim_op, self.sim_intent_emb, self.sim_input_emb, self.bad_negs, is_training)
             elif self.loss_type == 'softmax':
                 loss = self._tf_loss_softmax(self.sim_op, self.sim_intent_emb, self.sim_input_emb, self.bad_negs)
             else:
