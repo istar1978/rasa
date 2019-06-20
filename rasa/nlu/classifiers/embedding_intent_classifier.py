@@ -100,10 +100,10 @@ class EmbeddingIntentClassifier(Component):
         "num_neg": 20,
 
         # include intent sim loss
-        "include_intent_sim_loss": False,
+        "include_intent_sim_loss": True,
 
         # include text sim loss
-        "include_text_sim_loss": False,
+        "include_text_sim_loss": True,
 
         "iou_threshold": 1.0,
         # flag: if true, only minimize the maximum similarity for
