@@ -830,8 +830,25 @@ class EmbeddingIntentClassifier(Component):
             np.random.seed(self.random_seed)
             tf.set_random_seed(self.random_seed)
 
-            X_tensor = self._to_sparse_tensor(X)
-            Y_tensor = self._to_sparse_tensor(Y)
+            if self.evaluate_on_num_examples:
+
+                shuffled_ids = np.random.permutation(len(X))
+                val_ids = shuffled_ids[:self.evaluate_on_num_examples]
+                train_ids = shuffled_ids[self.evaluate_on_num_examples:]
+                # ids = [0, 1, 2]
+                # [print(self.inv_intent_dict[intent]) for intent in intents_for_X[ids]]
+                # exit()
+                X_tensor_val = self._to_sparse_tensor(X[val_ids])
+                Y_tensor_val = self._to_sparse_tensor(Y[val_ids])
+
+                X_tensor = self._to_sparse_tensor(X[train_ids])
+                Y_tensor = self._to_sparse_tensor(Y[train_ids])
+
+                val_dataset = tf.data.Dataset.from_tensor_slices((X_tensor_val, Y_tensor_val)).batch(self.validation_bs)
+            else:
+                val_dataset = None
+                X_tensor = self._to_sparse_tensor(X)
+                Y_tensor = self._to_sparse_tensor(Y)
 
             batch_size_in = tf.placeholder(tf.int64)
             train_dataset = tf.data.Dataset.from_tensor_slices((X_tensor, Y_tensor))
@@ -839,18 +856,6 @@ class EmbeddingIntentClassifier(Component):
             train_dataset = train_dataset.batch(batch_size_in, drop_remainder=self.fused_lstm)
 
             # tf.summary.scalar("batch_size", batch_size_in)
-
-            if self.evaluate_on_num_examples:
-                ids = np.random.permutation(len(X))[:self.evaluate_on_num_examples]
-                # ids = [0, 1, 2]
-                # [print(self.inv_intent_dict[intent]) for intent in intents_for_X[ids]]
-                # exit()
-                X_tensor_val = self._to_sparse_tensor(X[ids])
-                Y_tensor_val = self._to_sparse_tensor(Y[ids])
-
-                val_dataset = tf.data.Dataset.from_tensor_slices((X_tensor_val, Y_tensor_val)).batch(self.validation_bs)
-            else:
-                val_dataset = None
 
             if len(train_dataset.output_shapes[0]) == 2:
                 train_dataset_output_shapes_X = train_dataset.output_shapes[0]
@@ -1227,7 +1232,7 @@ class EmbeddingIntentClassifier(Component):
                 return np.array([x.toarray() for x in array_of_sparse]).squeeze()
             else:
                 seq_len = max([x.shape[0] for x in array_of_sparse])
-                X = np.ones([len(array_of_sparse), seq_len, array_of_sparse[0].shape[-1]], dtype=np.int32) * -1
+                X = np.ones([len(array_of_sparse), seq_len, array_of_sparse[0].shape[-1]], dtype=np.int32) * 0
                 for i, x in enumerate(array_of_sparse):
                     X[i, :x.shape[0], :] = x.toarray()
 
