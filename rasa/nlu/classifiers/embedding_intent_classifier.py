@@ -80,7 +80,7 @@ class EmbeddingIntentClassifier(Component):
         "layer_norm": True,
         # initial and final batch sizes - batch size will be
         # linearly increased for each epoch
-        "batch_size": [64, 256],
+        "batch_size": [64, 128],
         # number of epochs
         "epochs": 300,
 
@@ -728,14 +728,21 @@ class EmbeddingIntentClassifier(Component):
 
         return loss
 
-    def _tf_loss_softmax(self, sim: 'tf.Tensor', sim_intent_emb: 'tf.Tensor', sim_input_emb: 'tf.Tensor', bad_negs) -> 'tf.Tensor':
+    def _tf_loss_softmax(self, sim: 'tf.Tensor', sim_intent_emb: 'tf.Tensor', sim_input_emb: 'tf.Tensor', bad_negs, is_training) -> 'tf.Tensor':
         """Define loss."""
 
-        logits = tf.concat([sim[:, :1],
-                            sim[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs,
-                            sim_intent_emb + large_compatible_negative(bad_negs.dtype) * bad_negs,
-                            sim_input_emb + large_compatible_negative(bad_negs.dtype) * bad_negs
+        pos_sims = tf.cond(is_training, lambda: sim[:, :1], lambda: tf.expand_dims(tf.linalg.tensor_diag_part(sim),-1))
+        neg_sims = tf.cond(is_training, lambda: sim[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs, lambda: tf.linalg.set_diag(sim, tf.zeros([tf.shape(sim)[0]],tf.float32)))
+        sim_intent_emb += large_compatible_negative(bad_negs.dtype) * bad_negs
+        sim_input_emb = tf.cond(tf.math.equal(tf.shape(sim_input_emb)[1], 0), lambda: sim_input_emb,
+                                lambda: sim_input_emb + large_compatible_negative(bad_negs.dtype) * bad_negs)
+
+        logits = tf.concat([pos_sims,
+                            neg_sims,
+                            sim_intent_emb,
+                            sim_input_emb
                             ], -1)
+
         pos_labels = tf.ones_like(logits[:, :1])
         neg_labels = tf.zeros_like(logits[:, 1:])
         labels = tf.concat([pos_labels, neg_labels], -1)
@@ -907,7 +914,7 @@ class EmbeddingIntentClassifier(Component):
             if self.loss_type == 'margin':
                 loss = self._tf_loss_margin(self.sim_op, self.sim_intent_emb, self.sim_input_emb, self.bad_negs, is_training)
             elif self.loss_type == 'softmax':
-                loss = self._tf_loss_softmax(self.sim_op, self.sim_intent_emb, self.sim_input_emb, self.bad_negs)
+                loss = self._tf_loss_softmax(self.sim_op, self.sim_intent_emb, self.sim_input_emb, self.bad_negs, is_training)
             else:
                 raise
 
