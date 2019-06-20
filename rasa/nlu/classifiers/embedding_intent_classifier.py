@@ -98,6 +98,13 @@ class EmbeddingIntentClassifier(Component):
         # the number of incorrect intents, the algorithm will minimize
         # their similarity to the input words during training
         "num_neg": 20,
+
+        # include intent sim loss
+        "include_intent_sim_loss": False,
+
+        # include text sim loss
+        "include_text_sim_loss": False,
+
         "iou_threshold": 1.0,
         # flag: if true, only minimize the maximum similarity for
         # incorrect intent labels
@@ -224,6 +231,8 @@ class EmbeddingIntentClassifier(Component):
         self.mu_neg = config['mu_neg']
         self.similarity_type = config['similarity_type']
         self.loss_type = config['loss_type']
+        self.include_intent_sim_loss = config['include_intent_sim_loss']
+        self.include_text_sim_loss = config['include_text_sim_loss']
         self.num_neg = config['num_neg']
         self.iou_threshold = config['iou_threshold']
         self.use_max_sim_neg = config['use_max_sim_neg']
@@ -696,7 +705,9 @@ class EmbeddingIntentClassifier(Component):
         max_sim_intent_emb = tf.maximum(0., tf.reduce_max(sim_intent_emb, -1))
         intent_loss = max_sim_intent_emb * self.C_emb
         tf.summary.scalar('intent_loss', tf.reduce_mean(intent_loss))
-        loss += intent_loss
+
+        if self.include_intent_sim_loss:
+            loss += intent_loss
 
         # penalize max similarity between input embeddings
 
@@ -706,7 +717,9 @@ class EmbeddingIntentClassifier(Component):
         max_sim_input_emb = tf.maximum(0., tf.reduce_max(sim_input_emb, -1))
         text_emb_loss = max_sim_input_emb * self.C_emb
         tf.summary.scalar('text_emb_loss',tf.reduce_mean(text_emb_loss))
-        loss += text_emb_loss
+
+        if self.include_text_sim_loss:
+            loss += text_emb_loss
 
         # average the loss over the batch and add regularization losses
         reg_loss = tf.losses.get_regularization_loss()
