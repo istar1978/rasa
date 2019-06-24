@@ -7,9 +7,17 @@ from tqdm import tqdm
 from typing import Any, Dict, List, Optional, Text, Tuple
 
 import numpy as np
+from sklearn.cluster import MiniBatchKMeans
 from scipy.sparse import issparse, csr_matrix
-from tensor2tensor.models.transformer import transformer_small, transformer_prepare_encoder, transformer_encoder
-from tensor2tensor.layers.common_attention import add_timing_signal_1d, large_compatible_negative
+from tensor2tensor.models.transformer import (
+    transformer_small,
+    transformer_prepare_encoder,
+    transformer_encoder,
+)
+from tensor2tensor.layers.common_attention import (
+    add_timing_signal_1d,
+    large_compatible_negative,
+)
 
 from rasa.nlu.classifiers import INTENT_RANKING_LENGTH
 from rasa.nlu.components import Component
@@ -28,6 +36,14 @@ try:
     import tensorflow as tf
 except ImportError:
     tf = None
+
+
+def get_num_bits(tf_var: "tf.Tensor") -> int:
+    dtype_str = str(tf_var.dtype)
+    num_bits = int("".join([s for s in dtype_str if s.isdigit()]))
+    num_nums = np.prod(tf_var.get_shape().as_list())
+
+    return num_bits * num_nums
 
 
 class EmbeddingIntentClassifier(Component):
@@ -61,7 +77,6 @@ class EmbeddingIntentClassifier(Component):
         # sizes of hidden layers before the embedding layer for intent labels
         # the number of hidden layers is thus equal to the length of this list
         "hidden_layers_sizes_b": [],
-
         "share_embedding": False,
         "bidirectional": False,
         "fused_lstm": False,
@@ -74,7 +89,6 @@ class EmbeddingIntentClassifier(Component):
         "max_seq_length": 256,
         "num_heads": 4,
         "use_last": False,
-
         # training parameters
         "layer_norm": True,
         # initial and final batch sizes - batch size will be
@@ -82,7 +96,6 @@ class EmbeddingIntentClassifier(Component):
         "batch_size": [64, 256],
         # number of epochs
         "epochs": 300,
-
         # embedding parameters
         # dimension size of embedding vectors
         "embed_dim": 20,
@@ -92,8 +105,8 @@ class EmbeddingIntentClassifier(Component):
         # maximum negative similarity for incorrect intent labels
         "mu_neg": -0.4,  # should be -1.0 < ... < 1.0 for 'cosine'
         # the type of the similarity
-        "similarity_type": 'cosine',  # string 'cosine' or 'inner'
-        "loss_type": 'margin',  # string 'softmax' or 'margin'
+        "similarity_type": "cosine",  # string 'cosine' or 'inner'
+        "loss_type": "margin",  # string 'softmax' or 'margin'
         # the number of incorrect intents, the algorithm will minimize
         # their similarity to the input words during training
         "num_neg": 20,
@@ -104,7 +117,6 @@ class EmbeddingIntentClassifier(Component):
         # set random seed to any int to get reproducible results
         # try to change to another int if you are not getting good results
         "random_seed": None,
-
         # regularization parameters
         # the scale of L2 regularization
         "C2": 0.002,
@@ -113,35 +125,34 @@ class EmbeddingIntentClassifier(Component):
         "C_emb": 0.8,
         # dropout rate for rnn
         "droprate": 0.2,
-
         # flag: if true, the algorithm will split the intent labels into tokens
         #       and use bag-of-words representations for them
         "intent_tokenization_flag": False,
         # delimiter string to split the intent labels
-        "intent_split_symbol": '_',
-
+        "intent_split_symbol": "_",
         # visualization of accuracy
         # how often to calculate training accuracy
         "evaluate_every_num_epochs": 10,  # small values may hurt performance
         # how many examples to use for calculation of training accuracy
-        "evaluate_on_num_examples": 1000  # large values may hurt performance
+        "evaluate_on_num_examples": 1000,  # large values may hurt performance
     }
 
-    def __init__(self,
-                 component_config: Optional[Dict[Text, Any]] = None,
-                 inv_intent_dict: Optional[Dict[int, Text]] = None,
-                 encoded_all_intents: Optional[np.ndarray] = None,
-                 all_intents_embed_values: Optional[np.ndarray] = None,
-                 session: Optional['tf.Session'] = None,
-                 graph: Optional['tf.Graph'] = None,
-                 message_placeholder: Optional['tf.Tensor'] = None,
-                 intent_placeholder: Optional['tf.Tensor'] = None,
-                 similarity_op: Optional['tf.Tensor'] = None,
-                 all_intents_embed_in: Optional['tf.Tensor'] = None,
-                 sim_all: Optional['tf.Tensor'] = None,
-                 word_embed: Optional['tf.Tensor'] = None,
-                 intent_embed: Optional['tf.Tensor'] = None
-                 ) -> None:
+    def __init__(
+        self,
+        component_config: Optional[Dict[Text, Any]] = None,
+        inv_intent_dict: Optional[Dict[int, Text]] = None,
+        encoded_all_intents: Optional[np.ndarray] = None,
+        all_intents_embed_values: Optional[np.ndarray] = None,
+        session: Optional["tf.Session"] = None,
+        graph: Optional["tf.Graph"] = None,
+        message_placeholder: Optional["tf.Tensor"] = None,
+        intent_placeholder: Optional["tf.Tensor"] = None,
+        similarity_op: Optional["tf.Tensor"] = None,
+        all_intents_embed_in: Optional["tf.Tensor"] = None,
+        sim_all: Optional["tf.Tensor"] = None,
+        word_embed: Optional["tf.Tensor"] = None,
+        intent_embed: Optional["tf.Tensor"] = None,
+    ) -> None:
         """Declare instant variables with default values"""
 
         self._check_tensorflow()
@@ -174,69 +185,88 @@ class EmbeddingIntentClassifier(Component):
 
     # init helpers
     def _load_nn_architecture_params(self, config: Dict[Text, Any]) -> None:
-        self.hidden_layer_sizes = {'a': config['hidden_layers_sizes_a'],
-                                   'b': config['hidden_layers_sizes_b']}
+        self.hidden_layer_sizes = {
+            "a": config["hidden_layers_sizes_a"],
+            "b": config["hidden_layers_sizes_b"],
+        }
 
-        self.share_embedding = config['share_embedding']
+        self.share_embedding = config["share_embedding"]
         if self.share_embedding:
-            if self.hidden_layer_sizes['a'] != self.hidden_layer_sizes['b']:
-                raise ValueError("If embeddings are shared "
-                                 "hidden_layer_sizes must coincide")
+            if self.hidden_layer_sizes["a"] != self.hidden_layer_sizes["b"]:
+                raise ValueError(
+                    "If embeddings are shared " "hidden_layer_sizes must coincide"
+                )
 
-        self.bidirectional = config['bidirectional']
-        self.fused_lstm = config['fused_lstm']
-        self.gpu_lstm = config['gpu_lstm']
-        self.transformer = config['transformer']
-        if (self.gpu_lstm and self.fused_lstm) or (self.transformer and self.fused_lstm) or (self.gpu_lstm and self.transformer):
-            raise ValueError("Either `gpu_lstm` or `fused_lstm` or `transformer` should be specified")
+        self.bidirectional = config["bidirectional"]
+        self.fused_lstm = config["fused_lstm"]
+        self.gpu_lstm = config["gpu_lstm"]
+        self.transformer = config["transformer"]
+        if (
+            (self.gpu_lstm and self.fused_lstm)
+            or (self.transformer and self.fused_lstm)
+            or (self.gpu_lstm and self.transformer)
+        ):
+            raise ValueError(
+                "Either `gpu_lstm` or `fused_lstm` or `transformer` should be specified"
+            )
         if self.gpu_lstm or self.transformer:
-            if any(self.hidden_layer_sizes['a'][0] != size
-                   for size in self.hidden_layer_sizes['a']):
-                raise ValueError("GPU training only supports identical sizes among layers a")
-            if any(self.hidden_layer_sizes['b'][0] != size
-                   for size in self.hidden_layer_sizes['b']):
-                raise ValueError("GPU training only supports identical sizes among layers b")
+            if any(
+                self.hidden_layer_sizes["a"][0] != size
+                for size in self.hidden_layer_sizes["a"]
+            ):
+                raise ValueError(
+                    "GPU training only supports identical sizes among layers a"
+                )
+            if any(
+                self.hidden_layer_sizes["b"][0] != size
+                for size in self.hidden_layer_sizes["b"]
+            ):
+                raise ValueError(
+                    "GPU training only supports identical sizes among layers b"
+                )
 
-        self.pos_encoding = config['pos_encoding']
-        self.pos_max_timescale = config['pos_max_timescale']
-        self.max_seq_length = config['max_seq_length']
-        self.num_heads = config['num_heads']
-        self.use_last = config['use_last']
+        self.pos_encoding = config["pos_encoding"]
+        self.pos_max_timescale = config["pos_max_timescale"]
+        self.max_seq_length = config["max_seq_length"]
+        self.num_heads = config["num_heads"]
+        self.use_last = config["use_last"]
 
-        self.batch_size = config['batch_size']
-        self.epochs = config['epochs']
+        self.batch_size = config["batch_size"]
+        self.epochs = config["epochs"]
 
     def _load_embedding_params(self, config: Dict[Text, Any]) -> None:
-        self.layer_norm = config['layer_norm']
-        self.embed_dim = config['embed_dim']
-        self.mu_pos = config['mu_pos']
-        self.mu_neg = config['mu_neg']
-        self.similarity_type = config['similarity_type']
-        self.loss_type = config['loss_type']
-        self.num_neg = config['num_neg']
-        self.iou_threshold = config['iou_threshold']
-        self.use_max_sim_neg = config['use_max_sim_neg']
-        self.random_seed = self.component_config['random_seed']
+        self.layer_norm = config["layer_norm"]
+        self.embed_dim = config["embed_dim"]
+        self.mu_pos = config["mu_pos"]
+        self.mu_neg = config["mu_neg"]
+        self.similarity_type = config["similarity_type"]
+        self.loss_type = config["loss_type"]
+        self.num_neg = config["num_neg"]
+        self.iou_threshold = config["iou_threshold"]
+        self.use_max_sim_neg = config["use_max_sim_neg"]
+        self.random_seed = self.component_config["random_seed"]
 
     def _load_regularization_params(self, config: Dict[Text, Any]) -> None:
-        self.C2 = config['C2']
-        self.C_emb = config['C_emb']
-        self.droprate = config['droprate']
+        self.C2 = config["C2"]
+        self.C_emb = config["C_emb"]
+        self.droprate = config["droprate"]
 
     def _load_flag_if_tokenize_intents(self, config: Dict[Text, Any]) -> None:
-        self.intent_tokenization_flag = config['intent_tokenization_flag']
-        self.intent_split_symbol = config['intent_split_symbol']
+        self.intent_tokenization_flag = config["intent_tokenization_flag"]
+        self.intent_split_symbol = config["intent_split_symbol"]
         if self.intent_tokenization_flag and not self.intent_split_symbol:
-            logger.warning("intent_split_symbol was not specified, "
-                           "so intent tokenization will be ignored")
+            logger.warning(
+                "intent_split_symbol was not specified, "
+                "so intent tokenization will be ignored"
+            )
             self.intent_tokenization_flag = False
 
     def _load_visual_params(self, config: Dict[Text, Any]) -> None:
-        self.evaluate_every_num_epochs = config['evaluate_every_num_epochs']
+        self.evaluate_every_num_epochs = config["evaluate_every_num_epochs"]
         if self.evaluate_every_num_epochs < 1:
             self.evaluate_every_num_epochs = self.epochs
 
-        self.evaluate_on_num_examples = config['evaluate_on_num_examples']
+        self.evaluate_on_num_examples = config["evaluate_on_num_examples"]
 
     def _load_params(self) -> None:
 
@@ -255,19 +285,20 @@ class EmbeddingIntentClassifier(Component):
     def _check_tensorflow():
         if tf is None:
             raise ImportError(
-                'Failed to import `tensorflow`. '
-                'Please install `tensorflow`. '
-                'For example with `pip install tensorflow`.')
+                "Failed to import `tensorflow`. "
+                "Please install `tensorflow`. "
+                "For example with `pip install tensorflow`."
+            )
 
     # training data helpers:
     @staticmethod
-    def _create_intent_dict(training_data: 'TrainingData') -> Dict[Text, int]:
+    def _create_intent_dict(training_data: "TrainingData") -> Dict[Text, int]:
         """Create intent dictionary"""
 
-        distinct_intents = set([example.get("intent")
-                                for example in training_data.intent_examples])
-        return {intent: idx
-                for idx, intent in enumerate(sorted(distinct_intents))}
+        distinct_intents = set(
+            [example.get("intent") for example in training_data.intent_examples]
+        )
+        return {intent: idx for idx, intent in enumerate(sorted(distinct_intents))}
 
     @staticmethod
     def _find_example_for_intent(intent, examples):
@@ -275,9 +306,9 @@ class EmbeddingIntentClassifier(Component):
             if ex.get("intent") == intent:
                 return ex
 
-    def _create_encoded_intents(self,
-                                intent_dict: Dict[Text, int],
-                                training_data: 'TrainingData') -> np.ndarray:
+    def _create_encoded_intents(
+        self, intent_dict: Dict[Text, int], training_data: "TrainingData"
+    ) -> np.ndarray:
         """Create matrix with intents encoded in rows as bag of words.
 
         If intent_tokenization_flag is off, returns identity matrix.
@@ -290,9 +321,8 @@ class EmbeddingIntentClassifier(Component):
                 encoded_all_intents.insert(
                     idx,
                     self._find_example_for_intent(
-                        key,
-                        training_data.intent_examples
-                    ).get("intent_features")
+                        key, training_data.intent_examples
+                    ).get("intent_features"),
                 )
 
             return np.array(encoded_all_intents)
@@ -301,49 +331,55 @@ class EmbeddingIntentClassifier(Component):
 
     # noinspection PyPep8Naming
     def _prepare_data_for_training(
-        self,
-        training_data: 'TrainingData',
-        intent_dict: Dict[Text, int]
+        self, training_data: "TrainingData", intent_dict: Dict[Text, int]
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Prepare data for training"""
 
-        X = np.stack([e.get("text_features")
-                      for e in training_data.intent_examples])
+        X = np.stack([e.get("text_features") for e in training_data.intent_examples])
 
-        intents_for_X = np.array([intent_dict[e.get("intent")]
-                                  for e in training_data.intent_examples])
+        intents_for_X = np.array(
+            [intent_dict[e.get("intent")] for e in training_data.intent_examples]
+        )
 
         if self.intent_tokenization_flag:
-            Y = np.stack([e.get("intent_features")
-                          for e in training_data.intent_examples])
+            Y = np.stack(
+                [e.get("intent_features") for e in training_data.intent_examples]
+            )
         else:
-            Y = np.stack([self.encoded_all_intents[intent_idx]
-                          for intent_idx in intents_for_X])
+            Y = np.stack(
+                [self.encoded_all_intents[intent_idx] for intent_idx in intents_for_X]
+            )
 
         return X, Y, intents_for_X
 
     # tf helpers:
-    def _create_tf_embed_nn(self, x_in: 'tf.Tensor', is_training: 'tf.Tensor',
-                            layer_sizes: List[int], name: Text) -> 'tf.Tensor':
+    def _create_tf_embed_nn(
+        self,
+        x_in: "tf.Tensor",
+        is_training: "tf.Tensor",
+        layer_sizes: List[int],
+        name: Text,
+    ) -> "tf.Tensor":
         """Create nn with hidden layers and name"""
 
         reg = tf.contrib.layers.l2_regularizer(self.C2)
         x = x_in
         for i, layer_size in enumerate(layer_sizes):
-            x = tf.layers.dense(inputs=x,
-                                units=layer_size,
-                                activation=tf.nn.relu,
-                                kernel_regularizer=reg,
-                                name='hidden_layer_{}_{}'.format(name, i),
-                                reuse=tf.AUTO_REUSE)
+            x = tf.layers.dense(
+                inputs=x,
+                units=layer_size,
+                activation=tf.nn.relu,
+                kernel_regularizer=reg,
+                name="hidden_layer_{}_{}".format(name, i),
+                reuse=tf.AUTO_REUSE,
+            )
             x = tf.layers.dropout(x, rate=self.droprate, training=is_training)
 
         return x
 
-    def _create_rnn_cell(self,
-                         is_training: 'tf.Tensor',
-                         rnn_size: int,
-                         real_length) -> 'tf.contrib.rnn.RNNCell':
+    def _create_rnn_cell(
+        self, is_training: "tf.Tensor", rnn_size: int, real_length
+    ) -> "tf.contrib.rnn.RNNCell":
         """Create one rnn cell."""
 
         # chrono initialization for forget bias
@@ -352,11 +388,10 @@ class EmbeddingIntentClassifier(Component):
         bias_0 = -1.0
         characteristic_time = tf.reduce_mean(tf.cast(real_length, tf.float32))
         # right border that initializes forget gate close to 1
-        bias_1 = tf.log(characteristic_time - 1.)
+        bias_1 = tf.log(characteristic_time - 1.0)
         fbias = (bias_1 - bias_0) * np.random.random(rnn_size) + bias_0
 
-        keep_prob = 1.0 - (self.droprate *
-                           tf.cast(is_training, tf.float32))
+        keep_prob = 1.0 - (self.droprate * tf.cast(is_training, tf.float32))
 
         return ChronoBiasLayerNormBasicLSTMCell(
             num_units=rnn_size,
@@ -364,11 +399,16 @@ class EmbeddingIntentClassifier(Component):
             forget_bias=fbias,
             input_bias=-fbias,
             dropout_keep_prob=keep_prob,
-            reuse=tf.AUTO_REUSE
+            reuse=tf.AUTO_REUSE,
         )
 
-    def _create_tf_rnn_embed(self, x_in: 'tf.Tensor', is_training: 'tf.Tensor',
-                             layer_sizes: List[int], name: Text) -> 'tf.Tensor':
+    def _create_tf_rnn_embed(
+        self,
+        x_in: "tf.Tensor",
+        is_training: "tf.Tensor",
+        layer_sizes: List[int],
+        name: Text,
+    ) -> "tf.Tensor":
         """Create rnn for dialogue level embedding."""
 
         reg = tf.contrib.layers.l2_regularizer(self.C2)
@@ -391,23 +431,29 @@ class EmbeddingIntentClassifier(Component):
 
             for i, layer_size in enumerate(layer_sizes):
                 if self.bidirectional:
-                    cell_fw = tf.contrib.rnn.LSTMBlockFusedCell(layer_size,
-                                                                reuse=tf.AUTO_REUSE,
-                                                                name='rnn_fw_encoder_{}_{}'.format(name, i))
+                    cell_fw = tf.contrib.rnn.LSTMBlockFusedCell(
+                        layer_size,
+                        reuse=tf.AUTO_REUSE,
+                        name="rnn_fw_encoder_{}_{}".format(name, i),
+                    )
                     x_fw, _ = cell_fw(x, dtype=tf.float32, sequence_length=real_length)
 
-                    cell_bw = tf.contrib.rnn.LSTMBlockFusedCell(layer_size,
-                                                                reuse=tf.AUTO_REUSE,
-                                                                name='rnn_bw_encoder_{}_{}'.format(name, i))
+                    cell_bw = tf.contrib.rnn.LSTMBlockFusedCell(
+                        layer_size,
+                        reuse=tf.AUTO_REUSE,
+                        name="rnn_bw_encoder_{}_{}".format(name, i),
+                    )
                     cell_bw = tf.contrib.rnn.TimeReversedFusedRNN(cell_bw)
                     x_bw, _ = cell_bw(x, dtype=tf.float32, sequence_length=real_length)
 
                     x = tf.concat([x_fw, x_bw], -1)
 
                 else:
-                    cell = tf.contrib.rnn.LSTMBlockFusedCell(layer_size,
-                                                             reuse=tf.AUTO_REUSE,
-                                                             name='rnn_encoder_{}_{}'.format(name, i))
+                    cell = tf.contrib.rnn.LSTMBlockFusedCell(
+                        layer_size,
+                        reuse=tf.AUTO_REUSE,
+                        name="rnn_encoder_{}_{}".format(name, i),
+                    )
                     x, _ = cell(x, dtype=tf.float32, sequence_length=real_length)
 
             x = tf.transpose(x, [1, 0, 2])
@@ -418,14 +464,16 @@ class EmbeddingIntentClassifier(Component):
             x = tf.transpose(x, [1, 0, 2])
 
             if self.bidirectional:
-                direction = 'bidirectional'
+                direction = "bidirectional"
             else:
-                direction = 'unidirectional'
+                direction = "unidirectional"
 
-            lstm = tf.contrib.cudnn_rnn.CudnnLSTM(len(layer_sizes),
-                                                  layer_sizes[0],
-                                                  direction=direction,
-                                                  name='rnn_encoder_{}'.format(name))
+            lstm = tf.contrib.cudnn_rnn.CudnnLSTM(
+                len(layer_sizes),
+                layer_sizes[0],
+                direction=direction,
+                name="rnn_encoder_{}".format(name),
+            )
 
             x, _ = lstm(x, training=True)
             # prediction graph is created separately
@@ -453,27 +501,34 @@ class EmbeddingIntentClassifier(Component):
                 if key.endswith("dropout") or key == "label_smoothing":
                     setattr(hparams, key, value * tf.cast(is_training, tf.float32))
 
-            x = tf.layers.dense(inputs=x,
-                                units=hparams.hidden_size,
-                                use_bias=False,
-                                kernel_initializer=tf.random_normal_initializer(0.0, hparams.hidden_size**-0.5),
-                                kernel_regularizer=reg,
-                                name='transformer_embed_layer_{}'.format(name),
-                                reuse=tf.AUTO_REUSE)
-            x = tf.layers.dropout(x, rate=hparams.layer_prepostprocess_dropout, training=is_training)
+            x = tf.layers.dense(
+                inputs=x,
+                units=hparams.hidden_size,
+                use_bias=False,
+                kernel_initializer=tf.random_normal_initializer(
+                    0.0, hparams.hidden_size ** -0.5
+                ),
+                kernel_regularizer=reg,
+                name="transformer_embed_layer_{}".format(name),
+                reuse=tf.AUTO_REUSE,
+            )
+            x = tf.layers.dropout(
+                x, rate=hparams.layer_prepostprocess_dropout, training=is_training
+            )
 
             if hparams.multiply_embedding_mode == "sqrt_depth":
-                x *= hparams.hidden_size**0.5
+                x *= hparams.hidden_size ** 0.5
 
             x *= tf.expand_dims(mask, -1)
 
-            with tf.variable_scope('transformer_{}'.format(name), reuse=tf.AUTO_REUSE):
-                (x,
-                 self_attention_bias,
-                 encoder_decoder_attention_bias
-                 ) = transformer_prepare_encoder(x, None, hparams)
+            with tf.variable_scope("transformer_{}".format(name), reuse=tf.AUTO_REUSE):
+                (
+                    x,
+                    self_attention_bias,
+                    encoder_decoder_attention_bias,
+                ) = transformer_prepare_encoder(x, None, hparams)
 
-                if hparams.pos == 'custom_timing':
+                if hparams.pos == "custom_timing":
                     x = add_timing_signal_1d(x, max_timescale=self.pos_max_timescale)
 
                 x *= tf.expand_dims(mask, -1)
@@ -490,7 +545,8 @@ class EmbeddingIntentClassifier(Component):
                     self_attention_bias,
                     hparams,
                     nonpadding=mask,
-                    attn_bias_for_padding=attn_bias_for_padding)
+                    attn_bias_for_padding=attn_bias_for_padding,
+                )
 
             if self.use_last:
                 x = tf.reduce_sum(x * last, 1)
@@ -504,14 +560,20 @@ class EmbeddingIntentClassifier(Component):
         else:
             for i, layer_size in enumerate(layer_sizes):
                 if self.bidirectional:
-                    cell_fw = self._create_rnn_cell(is_training, layer_size, real_length)
-                    cell_bw = self._create_rnn_cell(is_training, layer_size, real_length)
+                    cell_fw = self._create_rnn_cell(
+                        is_training, layer_size, real_length
+                    )
+                    cell_bw = self._create_rnn_cell(
+                        is_training, layer_size, real_length
+                    )
 
                     x, _ = tf.nn.bidirectional_dynamic_rnn(
-                        cell_fw, cell_bw, x,
+                        cell_fw,
+                        cell_bw,
+                        x,
                         dtype=tf.float32,
                         sequence_length=real_length,
-                        scope='rnn_encoder_{}_{}'.format(name, i)
+                        scope="rnn_encoder_{}_{}".format(name, i),
                     )
                     x = tf.concat(x, 2)
 
@@ -519,71 +581,83 @@ class EmbeddingIntentClassifier(Component):
                     cell = self._create_rnn_cell(is_training, layer_size, real_length)
 
                     x, _ = tf.nn.dynamic_rnn(
-                        cell, x,
+                        cell,
+                        x,
                         dtype=tf.float32,
                         sequence_length=real_length,
-                        scope='rnn_encoder_{}_{}'.format(name, i)
+                        scope="rnn_encoder_{}_{}".format(name, i),
                     )
 
             x = tf.reduce_sum(x * last, 1)
 
         return x
 
-    def _create_tf_embed_a(self,
-                           a_in: 'tf.Tensor',
-                           is_training: 'tf.Tensor',
-                           ) -> 'tf.Tensor':
+    def _create_tf_embed_a(
+        self, a_in: "tf.Tensor", is_training: "tf.Tensor"
+    ) -> "tf.Tensor":
         """Create tf graph for training"""
 
         if len(a_in.shape) == 2:
-            a = self._create_tf_embed_nn(a_in, is_training,
-                                         self.hidden_layer_sizes['a'],
-                                         name='a_and_b' if self.share_embedding else 'a')
+            a = self._create_tf_embed_nn(
+                a_in,
+                is_training,
+                self.hidden_layer_sizes["a"],
+                name="a_and_b" if self.share_embedding else "a",
+            )
         else:
-            a = self._create_tf_rnn_embed(a_in, is_training,
-                                          self.hidden_layer_sizes['a'],
-                                          name='a_and_b' if self.share_embedding else 'a')
+            a = self._create_tf_rnn_embed(
+                a_in,
+                is_training,
+                self.hidden_layer_sizes["a"],
+                name="a_and_b" if self.share_embedding else "a",
+            )
 
         reg = tf.contrib.layers.l2_regularizer(self.C2)
-        emb_a = tf.layers.dense(inputs=a,
-                                units=self.embed_dim,
-                                kernel_regularizer=reg,
-                                name='embed_layer_{}'.format('a'),
-                                reuse=tf.AUTO_REUSE)
+        emb_a = tf.layers.dense(
+            inputs=a,
+            units=self.embed_dim,
+            kernel_regularizer=reg,
+            name="embed_layer_{}".format("a"),
+            reuse=tf.AUTO_REUSE,
+        )
 
         return emb_a
 
-    def _create_tf_embed_b(self,
-                           b_in: 'tf.Tensor',
-                           is_training: 'tf.Tensor',
-                           ) -> 'tf.Tensor':
+    def _create_tf_embed_b(
+        self, b_in: "tf.Tensor", is_training: "tf.Tensor"
+    ) -> "tf.Tensor":
         """Create tf graph for training"""
 
         if len(b_in.shape) == 2:
-            b = self._create_tf_embed_nn(b_in, is_training,
-                                         self.hidden_layer_sizes['b'],
-                                         name='a_and_b' if self.share_embedding else 'b')
+            b = self._create_tf_embed_nn(
+                b_in,
+                is_training,
+                self.hidden_layer_sizes["b"],
+                name="a_and_b" if self.share_embedding else "b",
+            )
 
         else:
-            b = self._create_tf_rnn_embed(b_in, is_training,
-                                          self.hidden_layer_sizes['b'],
-                                          name='a_and_b' if self.share_embedding else 'b')
+            b = self._create_tf_rnn_embed(
+                b_in,
+                is_training,
+                self.hidden_layer_sizes["b"],
+                name="a_and_b" if self.share_embedding else "b",
+            )
 
         reg = tf.contrib.layers.l2_regularizer(self.C2)
-        emb_b = tf.layers.dense(inputs=b,
-                                units=self.embed_dim,
-                                kernel_regularizer=reg,
-                                name='embed_layer_{}'.format('b'),
-                                reuse=tf.AUTO_REUSE)
+        emb_b = tf.layers.dense(
+            inputs=b,
+            units=self.embed_dim,
+            kernel_regularizer=reg,
+            name="embed_layer_{}".format("b"),
+            reuse=tf.AUTO_REUSE,
+        )
         return emb_b
 
     @staticmethod
-    def _tf_sample_neg(b,
-                       is_training: 'tf.Tensor',
-                       neg_ids=None,
-                       batch_size=None,
-                       first_only=False
-                       ) -> 'tf.Tensor':
+    def _tf_sample_neg(
+        b, is_training: "tf.Tensor", neg_ids=None, batch_size=None, first_only=False
+    ) -> "tf.Tensor":
 
         all_b = b[tf.newaxis, :, :]
         if batch_size is None:
@@ -601,13 +675,13 @@ class EmbeddingIntentClassifier(Component):
         else:
             out_b = all_b
 
-        return tf.cond(tf.logical_and(is_training, tf.shape(neg_ids)[0] > 1), sample_neg_b, lambda: out_b)
+        return tf.cond(
+            tf.logical_and(is_training, tf.shape(neg_ids)[0] > 1),
+            sample_neg_b,
+            lambda: out_b,
+        )
 
-    def _tf_calc_iou(self,
-                     b_raw,
-                     is_training: 'tf.Tensor',
-                     neg_ids,
-                     ) -> 'tf.Tensor':
+    def _tf_calc_iou(self, b_raw, is_training: "tf.Tensor", neg_ids) -> "tf.Tensor":
 
         if len(b_raw.shape) == 3:
             b_raw = tf.reduce_sum(b_raw, 1)
@@ -619,9 +693,9 @@ class EmbeddingIntentClassifier(Component):
 
         return tf.reduce_sum(intersection_b_raw, -1) / tf.reduce_sum(union_b_raw, -1)
 
-    def _tf_sim(self,
-                a: 'tf.Tensor',
-                b: 'tf.Tensor') -> Tuple['tf.Tensor', 'tf.Tensor', 'tf.Tensor']:
+    def _tf_sim(
+        self, a: "tf.Tensor", b: "tf.Tensor"
+    ) -> Tuple["tf.Tensor", "tf.Tensor", "tf.Tensor"]:
         """Define similarity
 
         in two cases:
@@ -629,7 +703,7 @@ class EmbeddingIntentClassifier(Component):
             sim_emb: between individual embedded intent labels only
         """
 
-        if self.similarity_type == 'cosine':
+        if self.similarity_type == "cosine":
             # normalize embedding vectors for cosine similarity
             a = tf.nn.l2_normalize(a, -1)
             b = tf.nn.l2_normalize(b, -1)
@@ -639,7 +713,7 @@ class EmbeddingIntentClassifier(Component):
         else:
             a_pos = tf.expand_dims(a, 1)
 
-        if self.similarity_type in {'cosine', 'inner'}:
+        if self.similarity_type in {"cosine", "inner"}:
             sim = tf.reduce_sum(a_pos * b, -1)
             sim_intent_emb = tf.reduce_sum(b[:, :1, :] * b[:, 1:, :], -1)
             if len(a.shape) == 3:
@@ -650,54 +724,71 @@ class EmbeddingIntentClassifier(Component):
             return sim, sim_intent_emb, sim_input_emb
 
         else:
-            raise ValueError("Wrong similarity type {}, "
-                             "should be 'cosine' or 'inner'"
-                             "".format(self.similarity_type))
+            raise ValueError(
+                "Wrong similarity type {}, "
+                "should be 'cosine' or 'inner'"
+                "".format(self.similarity_type)
+            )
 
-    def _tf_loss_margin(self, sim: 'tf.Tensor', sim_intent_emb: 'tf.Tensor', sim_input_emb: 'tf.Tensor', bad_negs) -> 'tf.Tensor':
+    def _tf_loss_margin(
+        self,
+        sim: "tf.Tensor",
+        sim_intent_emb: "tf.Tensor",
+        sim_input_emb: "tf.Tensor",
+        bad_negs,
+    ) -> "tf.Tensor":
         """Define loss"""
 
         # loss for maximizing similarity with correct action
-        loss = tf.maximum(0., self.mu_pos - sim[:, 0])
+        loss = tf.maximum(0.0, self.mu_pos - sim[:, 0])
 
         sim_neg = sim[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs
         if self.use_max_sim_neg:
             # minimize only maximum similarity over incorrect actions
             max_sim_neg = tf.reduce_max(sim_neg, -1)
-            loss += tf.maximum(0., self.mu_neg + max_sim_neg)
+            loss += tf.maximum(0.0, self.mu_neg + max_sim_neg)
         else:
             # minimize all similarities with incorrect actions
-            max_margin = tf.maximum(0., self.mu_neg + sim_neg)
+            max_margin = tf.maximum(0.0, self.mu_neg + sim_neg)
             loss += tf.reduce_sum(max_margin, -1)
 
         # penalize max similarity between intent embeddings
         sim_intent_emb += large_compatible_negative(bad_negs.dtype) * bad_negs
-        max_sim_intent_emb = tf.maximum(0., tf.reduce_max(sim_intent_emb, -1))
+        max_sim_intent_emb = tf.maximum(0.0, tf.reduce_max(sim_intent_emb, -1))
         loss += max_sim_intent_emb * self.C_emb
 
         # penalize max similarity between input embeddings
         sim_input_emb += large_compatible_negative(bad_negs.dtype) * bad_negs
-        max_sim_input_emb = tf.maximum(0., tf.reduce_max(sim_input_emb, -1))
+        max_sim_input_emb = tf.maximum(0.0, tf.reduce_max(sim_input_emb, -1))
         loss += max_sim_input_emb * self.C_emb
 
         # average the loss over the batch and add regularization losses
         loss = tf.reduce_mean(loss) + tf.losses.get_regularization_loss()
         return loss
 
-    def _tf_loss_softmax(self, sim: 'tf.Tensor', sim_intent_emb: 'tf.Tensor', sim_input_emb: 'tf.Tensor', bad_negs) -> 'tf.Tensor':
+    def _tf_loss_softmax(
+        self,
+        sim: "tf.Tensor",
+        sim_intent_emb: "tf.Tensor",
+        sim_input_emb: "tf.Tensor",
+        bad_negs,
+    ) -> "tf.Tensor":
         """Define loss."""
 
-        logits = tf.concat([sim[:, :1],
-                            sim[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs,
-                            sim_intent_emb + large_compatible_negative(bad_negs.dtype) * bad_negs,
-                            sim_input_emb + large_compatible_negative(bad_negs.dtype) * bad_negs
-                            ], -1)
+        logits = tf.concat(
+            [
+                sim[:, :1],
+                sim[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs,
+                sim_intent_emb + large_compatible_negative(bad_negs.dtype) * bad_negs,
+                sim_input_emb + large_compatible_negative(bad_negs.dtype) * bad_negs,
+            ],
+            -1,
+        )
         pos_labels = tf.ones_like(logits[:, :1])
         neg_labels = tf.zeros_like(logits[:, 1:])
         labels = tf.concat([pos_labels, neg_labels], -1)
 
-        loss = tf.losses.softmax_cross_entropy(labels,
-                                               logits)
+        loss = tf.losses.softmax_cross_entropy(labels, logits)
         # add regularization losses
         loss += tf.losses.get_regularization_loss()
         return loss
@@ -713,9 +804,10 @@ class EmbeddingIntentClassifier(Component):
             return int(self.batch_size)
 
         if self.epochs > 1:
-            batch_size = int(self.batch_size[0] +
-                             epoch * (self.batch_size[1] -
-                                      self.batch_size[0]) / (self.epochs - 1))
+            batch_size = int(
+                self.batch_size[0]
+                + epoch * (self.batch_size[1] - self.batch_size[0]) / (self.epochs - 1)
+            )
 
             return batch_size if batch_size % 2 == 0 else batch_size + 1
 
@@ -728,11 +820,23 @@ class EmbeddingIntentClassifier(Component):
         coo = [x.tocoo() for x in array_of_sparse]
         data = [v for x in array_of_sparse for v in x.data]
         if seq_len == 1 and auto2d:
-            indices = [ids for i, x in enumerate(coo) for ids in zip([i] * len(x.row), x.col)]
-            return tf.SparseTensor(indices, data, (len(array_of_sparse), array_of_sparse[0].shape[-1]))
+            indices = [
+                ids for i, x in enumerate(coo) for ids in zip([i] * len(x.row), x.col)
+            ]
+            return tf.SparseTensor(
+                indices, data, (len(array_of_sparse), array_of_sparse[0].shape[-1])
+            )
         else:
-            indices = [ids for i, x in enumerate(coo) for ids in zip([i] * len(x.row), x.row, x.col)]
-            return tf.SparseTensor(indices, data, (len(array_of_sparse), seq_len, array_of_sparse[0].shape[-1]))
+            indices = [
+                ids
+                for i, x in enumerate(coo)
+                for ids in zip([i] * len(x.row), x.row, x.col)
+            ]
+            return tf.SparseTensor(
+                indices,
+                data,
+                (len(array_of_sparse), seq_len, array_of_sparse[0].shape[-1]),
+            )
 
     @staticmethod
     def _sparse_tensor_to_dense(sparse, units=None, shape=None):
@@ -745,43 +849,51 @@ class EmbeddingIntentClassifier(Component):
         return tf.cast(tf.reshape(tf.sparse_tensor_to_dense(sparse), shape), tf.float32)
 
     # noinspection PyPep8Naming
-    def train(self,
-              training_data: 'TrainingData',
-              cfg: Optional['RasaNLUModelConfig'] = None,
-              **kwargs: Any) -> None:
+    def train(
+        self,
+        training_data: "TrainingData",
+        cfg: Optional["RasaNLUModelConfig"] = None,
+        **kwargs: Any
+    ) -> None:
         """Train the embedding intent classifier on a data set."""
 
         intent_dict = self._create_intent_dict(training_data)
         if len(intent_dict) < 2:
-            logger.error("Can not train an intent classifier. "
-                         "Need at least 2 different classes. "
-                         "Skipping training of intent classifier.")
+            logger.error(
+                "Can not train an intent classifier. "
+                "Need at least 2 different classes. "
+                "Skipping training of intent classifier."
+            )
             return
 
         self.inv_intent_dict = {v: k for k, v in intent_dict.items()}
         self.encoded_all_intents = self._create_encoded_intents(
-            intent_dict, training_data)
+            intent_dict, training_data
+        )
 
         X, Y, intents_for_X = self._prepare_data_for_training(
-            training_data, intent_dict)
+            training_data, intent_dict
+        )
 
         if self.share_embedding:
             if X[0].shape[-1] != Y[0].shape[-1]:
-                raise ValueError("If embeddings are shared "
-                                 "text features and intent features "
-                                 "must coincide")
+                raise ValueError(
+                    "If embeddings are shared "
+                    "text features and intent features "
+                    "must coincide"
+                )
 
         # check if number of negatives is less than number of intents
-        logger.debug("Check if num_neg {} is smaller than "
-                     "number of intents {}, "
-                     "else set num_neg to the number of intents - 1"
-                     "".format(self.num_neg,
-                               self.encoded_all_intents.shape[0]))
-        self.num_neg = min(self.num_neg,
-                           self.encoded_all_intents.shape[0] - 1)
+        logger.debug(
+            "Check if num_neg {} is smaller than "
+            "number of intents {}, "
+            "else set num_neg to the number of intents - 1"
+            "".format(self.num_neg, self.encoded_all_intents.shape[0])
+        )
+        self.num_neg = min(self.num_neg, self.encoded_all_intents.shape[0] - 1)
 
         self.graph = tf.Graph()
-        with self.graph.as_default():
+        with self.graph.as_default() as g:
             # set random seed
             np.random.seed(self.random_seed)
             tf.set_random_seed(self.random_seed)
@@ -792,33 +904,47 @@ class EmbeddingIntentClassifier(Component):
             batch_size_in = tf.placeholder(tf.int64)
             train_dataset = tf.data.Dataset.from_tensor_slices((X_tensor, Y_tensor))
             train_dataset = train_dataset.shuffle(buffer_size=len(X))
-            train_dataset = train_dataset.batch(batch_size_in, drop_remainder=self.fused_lstm)
+            train_dataset = train_dataset.batch(
+                batch_size_in, drop_remainder=self.fused_lstm
+            )
 
             if self.evaluate_on_num_examples:
-                ids = np.random.permutation(len(X))[:self.evaluate_on_num_examples]
+                ids = np.random.permutation(len(X))[: self.evaluate_on_num_examples]
                 # ids = [0, 1, 2]
                 # [print(self.inv_intent_dict[intent]) for intent in intents_for_X[ids]]
                 # exit()
                 X_tensor_val = self._to_sparse_tensor(X[ids])
                 Y_tensor_val = self._to_sparse_tensor(Y[ids])
 
-                val_dataset = tf.data.Dataset.from_tensor_slices((X_tensor_val, Y_tensor_val)).batch(self.evaluate_on_num_examples)
+                val_dataset = tf.data.Dataset.from_tensor_slices(
+                    (X_tensor_val, Y_tensor_val)
+                ).batch(self.evaluate_on_num_examples)
             else:
                 val_dataset = None
 
             if len(train_dataset.output_shapes[0]) == 2:
                 train_dataset_output_shapes_X = train_dataset.output_shapes[0]
             else:
-                train_dataset_output_shapes_X = (None, None, train_dataset.output_shapes[0][-1])
+                train_dataset_output_shapes_X = (
+                    None,
+                    None,
+                    train_dataset.output_shapes[0][-1],
+                )
 
             if len(train_dataset.output_shapes[1]) == 2:
                 train_dataset_output_shapes_Y = train_dataset.output_shapes[1]
             else:
-                train_dataset_output_shapes_Y = (None, None, train_dataset.output_shapes[1][-1])
+                train_dataset_output_shapes_Y = (
+                    None,
+                    None,
+                    train_dataset.output_shapes[1][-1],
+                )
 
-            iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
-                                                       (train_dataset_output_shapes_X, train_dataset_output_shapes_Y),
-                                                       output_classes=train_dataset.output_classes)
+            iterator = tf.data.Iterator.from_structure(
+                train_dataset.output_types,
+                (train_dataset_output_shapes_X, train_dataset_output_shapes_Y),
+                output_classes=train_dataset.output_classes,
+            )
             # iterator = train_dataset.make_initializable_iterator()
             a_sparse, b_sparse = iterator.get_next()
 
@@ -830,19 +956,31 @@ class EmbeddingIntentClassifier(Component):
             self.word_embed = self._create_tf_embed_a(a_raw, is_training)
             self.intent_embed = self._create_tf_embed_b(b_raw, is_training)
 
-            neg_ids = tf.random.categorical(tf.log(1. - tf.eye(tf.shape(b_raw)[0])), self.num_neg)
+            neg_ids = tf.random.categorical(
+                tf.log(1.0 - tf.eye(tf.shape(b_raw)[0])), self.num_neg
+            )
 
             iou_intent = self._tf_calc_iou(b_raw, is_training, neg_ids)
-            bad_negs = 1. - tf.nn.relu(tf.sign(self.iou_threshold - iou_intent))
+            bad_negs = 1.0 - tf.nn.relu(tf.sign(self.iou_threshold - iou_intent))
 
-            tiled_word_embed = self._tf_sample_neg(self.word_embed, is_training, neg_ids, first_only=True)
-            tiled_intent_embed = self._tf_sample_neg(self.intent_embed, is_training, neg_ids)
+            tiled_word_embed = self._tf_sample_neg(
+                self.word_embed, is_training, neg_ids, first_only=True
+            )
+            tiled_intent_embed = self._tf_sample_neg(
+                self.intent_embed, is_training, neg_ids
+            )
 
-            self.sim_op, sim_intent_emb, sim_input_emb = self._tf_sim(tiled_word_embed, tiled_intent_embed)
-            if self.loss_type == 'margin':
-                loss = self._tf_loss_margin(self.sim_op, sim_intent_emb, sim_input_emb, bad_negs)
-            elif self.loss_type == 'softmax':
-                loss = self._tf_loss_softmax(self.sim_op, sim_intent_emb, sim_input_emb, bad_negs)
+            self.sim_op, sim_intent_emb, sim_input_emb = self._tf_sim(
+                tiled_word_embed, tiled_intent_embed
+            )
+            if self.loss_type == "margin":
+                loss = self._tf_loss_margin(
+                    self.sim_op, sim_intent_emb, sim_input_emb, bad_negs
+                )
+            elif self.loss_type == "softmax":
+                loss = self._tf_loss_softmax(
+                    self.sim_op, sim_intent_emb, sim_input_emb, bad_negs
+                )
             else:
                 raise
 
@@ -854,49 +992,59 @@ class EmbeddingIntentClassifier(Component):
             else:
                 val_init_op = None
 
-            # [print(v.name, v.shape) for v in tf.trainable_variables()]
-            # exit()
             # train tensorflow graph
             self.session = tf.Session()
 
             # self._train_tf(X, Y, intents_for_X, negs_in,
             #                loss, is_training, train_op)
-            self._train_tf_dataset(train_init_op, val_init_op, batch_size_in, loss, is_training, train_op)
+            self._train_tf_dataset(
+                train_init_op, val_init_op, batch_size_in, loss, is_training, train_op
+            )
 
-            self.all_intents_embed_values = self._create_all_intents_embed(self.encoded_all_intents, iterator)
+            self.all_intents_embed_values = self._create_all_intents_embed(
+                self.encoded_all_intents, iterator
+            )
 
             # prediction graph
-            self.all_intents_embed_in = tf.placeholder(tf.float32, (None, None, self.embed_dim),
-                                                       name='all_intents_embed')
+            self.all_intents_embed_in = tf.placeholder(
+                tf.float32, (None, None, self.embed_dim), name="all_intents_embed"
+            )
 
-            self.a_in = tf.placeholder(a_raw.dtype, a_raw.shape, name='a')
-            self.b_in = tf.placeholder(b_raw.dtype, b_raw.shape, name='b')
+            self.a_in = tf.placeholder(a_raw.dtype, a_raw.shape, name="a")
+            self.b_in = tf.placeholder(b_raw.dtype, b_raw.shape, name="b")
 
             if not self.gpu_lstm:
                 self.word_embed = self._create_tf_embed_a(self.a_in, is_training)
                 self.intent_embed = self._create_tf_embed_b(self.b_in, is_training)
 
-                tiled_intent_embed = self._tf_sample_neg(self.intent_embed, is_training, None, tf.shape(self.word_embed)[0])
+                tiled_intent_embed = self._tf_sample_neg(
+                    self.intent_embed, is_training, None, tf.shape(self.word_embed)[0]
+                )
 
                 self.sim_op, _, _ = self._tf_sim(self.word_embed, tiled_intent_embed)
 
-                self.sim_all, _, _ = self._tf_sim(self.word_embed, self.all_intents_embed_in)
+                self.sim_all, _, _ = self._tf_sim(
+                    self.word_embed, self.all_intents_embed_in
+                )
 
-    def _train_tf_dataset(self,
-                          train_init_op,
-                          val_init_op,
-                          batch_size_in,
-                          loss: 'tf.Tensor',
-                          is_training: 'tf.Tensor',
-                          train_op: 'tf.Tensor'
-                          ) -> None:
+    def _train_tf_dataset(
+        self,
+        train_init_op,
+        val_init_op,
+        batch_size_in,
+        loss: "tf.Tensor",
+        is_training: "tf.Tensor",
+        train_op: "tf.Tensor",
+    ) -> None:
         """Train tf graph"""
 
         self.session.run(tf.global_variables_initializer())
 
         if self.evaluate_on_num_examples:
-            logger.info("Accuracy is updated every {} epochs"
-                        "".format(self.evaluate_every_num_epochs))
+            logger.info(
+                "Accuracy is updated every {} epochs"
+                "".format(self.evaluate_every_num_epochs)
+            )
 
         pbar = tqdm(range(self.epochs), desc="Epochs", disable=is_logging_disabled())
         train_acc = 0
@@ -911,8 +1059,9 @@ class EmbeddingIntentClassifier(Component):
             batches_per_epoch = 0
             while True:
                 try:
-                    _, batch_loss = self.session.run((train_op, loss),
-                                                     feed_dict={is_training: True})
+                    _, batch_loss = self.session.run(
+                        (train_op, loss), feed_dict={is_training: True}
+                    )
 
                 except tf.errors.OutOfRangeError:
                     break
@@ -923,25 +1072,29 @@ class EmbeddingIntentClassifier(Component):
             ep_loss /= batches_per_epoch
 
             if self.evaluate_on_num_examples and val_init_op is not None:
-                if (ep == 0 or
-                        (ep + 1) % self.evaluate_every_num_epochs == 0 or
-                        (ep + 1) == self.epochs):
+                if (
+                    ep == 0
+                    or (ep + 1) % self.evaluate_every_num_epochs == 0
+                    or (ep + 1) == self.epochs
+                ):
                     train_acc = self._output_training_stat_dataset(val_init_op)
                     last_loss = ep_loss
 
-                pbar.set_postfix({
-                    "loss": "{:.3f}".format(ep_loss),
-                    "acc": "{:.3f}".format(train_acc)
-                })
+                pbar.set_postfix(
+                    {
+                        "loss": "{:.3f}".format(ep_loss),
+                        "acc": "{:.3f}".format(train_acc),
+                    }
+                )
             else:
-                pbar.set_postfix({
-                    "loss": "{:.3f}".format(ep_loss)
-                })
+                pbar.set_postfix({"loss": "{:.3f}".format(ep_loss)})
 
         if self.evaluate_on_num_examples:
-            logger.info("Finished training embedding classifier, "
-                        "loss={:.3f}, train accuracy={:.3f}"
-                        "".format(last_loss, train_acc))
+            logger.info(
+                "Finished training embedding classifier, "
+                "loss={:.3f}, train accuracy={:.3f}"
+                "".format(last_loss, train_acc)
+            )
 
     def _output_training_stat_dataset(self, val_init_op) -> np.ndarray:
         """Output training statistics"""
@@ -959,8 +1112,9 @@ class EmbeddingIntentClassifier(Component):
         batch_size = self._linearly_increasing_batch_size(0)
 
         if iterator is None:
-            batches_per_epoch = (len(encoded_all_intents) // batch_size +
-                                 int(len(encoded_all_intents) % batch_size > 0))
+            batches_per_epoch = len(encoded_all_intents) // batch_size + int(
+                len(encoded_all_intents) % batch_size > 0
+            )
 
             for i in range(batches_per_epoch):
                 start_idx = i * batch_size
@@ -969,18 +1123,25 @@ class EmbeddingIntentClassifier(Component):
                 # batch_b = self._to_sparse_tensor(encoded_all_intents[start_idx:end_idx])
                 batch_b = self._toarray(encoded_all_intents[start_idx:end_idx])
 
-                all_intents_embed.append(self.session.run(self.intent_embed, feed_dict={self.b_in: batch_b}))
+                all_intents_embed.append(
+                    self.session.run(self.intent_embed, feed_dict={self.b_in: batch_b})
+                )
         else:
             if len(iterator.output_shapes[0]) == 2:
                 shape_X = (len(encoded_all_intents), iterator.output_shapes[0][-1])
             else:
                 shape_X = (len(encoded_all_intents), 1, iterator.output_shapes[0][-1])
 
-            X_tensor = tf.SparseTensor(tf.zeros((0, len(iterator.output_shapes[0])), tf.int64),
-                                       tf.zeros((0,), tf.int32), shape_X)
+            X_tensor = tf.SparseTensor(
+                tf.zeros((0, len(iterator.output_shapes[0])), tf.int64),
+                tf.zeros((0,), tf.int32),
+                shape_X,
+            )
             Y_tensor = self._to_sparse_tensor(encoded_all_intents)
 
-            all_intents_dataset = tf.data.Dataset.from_tensor_slices((X_tensor, Y_tensor)).batch(batch_size)
+            all_intents_dataset = tf.data.Dataset.from_tensor_slices(
+                (X_tensor, Y_tensor)
+            ).batch(batch_size)
             self.session.run(iterator.make_initializer(all_intents_dataset))
 
             while True:
@@ -995,24 +1156,23 @@ class EmbeddingIntentClassifier(Component):
 
     # process helpers
     # noinspection PyPep8Naming
-    def _calculate_message_sim(self,
-                               X: np.ndarray,
-                               all_Y: np.ndarray
-                               ) -> Tuple[np.ndarray, List[float]]:
+    def _calculate_message_sim(
+        self, X: np.ndarray, all_Y: np.ndarray
+    ) -> Tuple[np.ndarray, List[float]]:
         """Load tf graph and calculate message similarities"""
 
-        message_sim = self.session.run(self.sim_op,
-                                       feed_dict={self.a_in: X,
-                                                  self.b_in: all_Y})
+        message_sim = self.session.run(
+            self.sim_op, feed_dict={self.a_in: X, self.b_in: all_Y}
+        )
         message_sim = message_sim.flatten()  # sim is a matrix
 
         intent_ids = message_sim.argsort()[::-1]
         message_sim[::-1].sort()
 
-        if self.similarity_type == 'cosine':
+        if self.similarity_type == "cosine":
             # clip negative values to zero
             message_sim[message_sim < 0] = 0
-        elif self.similarity_type == 'inner':
+        elif self.similarity_type == "inner":
             # normalize result to [0, 1] with softmax
             message_sim = np.exp(message_sim)
             message_sim /= np.sum(message_sim)
@@ -1021,27 +1181,29 @@ class EmbeddingIntentClassifier(Component):
         return intent_ids, message_sim.tolist()
 
     # noinspection PyPep8Naming
-    def _calculate_message_sim_all(self,
-                                   X: np.ndarray
-                                   ) -> Tuple[np.ndarray, List[float]]:
+    def _calculate_message_sim_all(
+        self, X: np.ndarray
+    ) -> Tuple[np.ndarray, List[float]]:
         """Load tf graph and calculate message similarities"""
 
         message_sim = self.session.run(
             self.sim_all,
-            feed_dict={self.a_in: X,
-                       self.all_intents_embed_in: self.all_intents_embed_values}
+            feed_dict={
+                self.a_in: X,
+                self.all_intents_embed_in: self.all_intents_embed_values,
+            },
         )
         message_sim = message_sim.flatten()  # sim is a matrix
 
         intent_ids = message_sim.argsort()[::-1]
         message_sim[::-1].sort()
 
-        if self.similarity_type == 'cosine':
+        if self.similarity_type == "cosine":
             # clip negative values to zero
             message_sim[message_sim < 0] = 0
-        elif self.similarity_type == 'inner':
+        elif self.similarity_type == "inner":
             # normalize result to [0, 1] with softmax but only over 3*num_neg+1 values
-            message_sim[3*self.num_neg+1:] += -np.inf
+            message_sim[3 * self.num_neg + 1 :] += -np.inf
             message_sim = np.exp(message_sim)
             message_sim /= np.sum(message_sim)
 
@@ -1056,25 +1218,33 @@ class EmbeddingIntentClassifier(Component):
                 return np.array([x.toarray() for x in array_of_sparse]).squeeze()
             else:
                 seq_len = max([x.shape[0] for x in array_of_sparse])
-                X = np.ones([len(array_of_sparse), seq_len, array_of_sparse[0].shape[-1]], dtype=np.int32) * -1
+                X = (
+                    np.ones(
+                        [len(array_of_sparse), seq_len, array_of_sparse[0].shape[-1]],
+                        dtype=np.int32,
+                    )
+                    * -1
+                )
                 for i, x in enumerate(array_of_sparse):
-                    X[i, :x.shape[0], :] = x.toarray()
+                    X[i, : x.shape[0], :] = x.toarray()
 
                 return X
         else:
             return array_of_sparse
 
     # noinspection PyPep8Naming
-    def process(self, message: 'Message', **kwargs: Any) -> None:
+    def process(self, message: "Message", **kwargs: Any) -> None:
         """Return the most likely intent and its similarity to the input."""
 
         intent = {"name": None, "confidence": 0.0}
         intent_ranking = []
 
         if self.session is None:
-            logger.error("There is no trained tf.session: "
-                         "component is either not trained or "
-                         "didn't receive enough training data")
+            logger.error(
+                "There is no trained tf.session: "
+                "component is either not trained or "
+                "didn't receive enough training data"
+            )
 
         else:
             # get features (bag of words) for a message
@@ -1102,21 +1272,22 @@ class EmbeddingIntentClassifier(Component):
 
             # if X contains all zeros do not predict some label
             if X.any() and intent_ids.size > 0:
-                intent = {"name": self.inv_intent_dict[intent_ids[0]],
-                          "confidence": message_sim[0]}
+                intent = {
+                    "name": self.inv_intent_dict[intent_ids[0]],
+                    "confidence": message_sim[0],
+                }
 
                 ranking = list(zip(list(intent_ids), message_sim))
                 ranking = ranking[:INTENT_RANKING_LENGTH]
-                intent_ranking = [{"name": self.inv_intent_dict[intent_idx],
-                                   "confidence": score}
-                                  for intent_idx, score in ranking]
+                intent_ranking = [
+                    {"name": self.inv_intent_dict[intent_idx], "confidence": score}
+                    for intent_idx, score in ranking
+                ]
 
         message.set("intent", intent, add_to_output=True)
         message.set("intent_ranking", intent_ranking, add_to_output=True)
 
-    def persist(self,
-                file_name: Text,
-                model_dir: Text) -> Dict[Text, Any]:
+    def persist(self, file_name: Text, model_dir: Text) -> Dict[Text, Any]:
         """Persist this model into the passed directory.
 
         Return the metadata necessary to load the model again.
@@ -1132,63 +1303,62 @@ class EmbeddingIntentClassifier(Component):
         except OSError as e:
             # be happy if someone already created the path
             import errno
+
             if e.errno != errno.EEXIST:
                 raise
         with self.graph.as_default():
             if not self.gpu_lstm:
-                self.graph.clear_collection('message_placeholder')
-                self.graph.add_to_collection('message_placeholder',
-                                             self.a_in)
+                self.graph.clear_collection("message_placeholder")
+                self.graph.add_to_collection("message_placeholder", self.a_in)
 
-                self.graph.clear_collection('intent_placeholder')
-                self.graph.add_to_collection('intent_placeholder',
-                                             self.b_in)
+                self.graph.clear_collection("intent_placeholder")
+                self.graph.add_to_collection("intent_placeholder", self.b_in)
 
-                self.graph.clear_collection('similarity_op')
-                self.graph.add_to_collection('similarity_op',
-                                             self.sim_op)
+                self.graph.clear_collection("similarity_op")
+                self.graph.add_to_collection("similarity_op", self.sim_op)
 
-                self.graph.clear_collection('all_intents_embed_in')
-                self.graph.add_to_collection('all_intents_embed_in',
-                                             self.all_intents_embed_in)
-                self.graph.clear_collection('sim_all')
-                self.graph.add_to_collection('sim_all',
-                                             self.sim_all)
+                self.graph.clear_collection("all_intents_embed_in")
+                self.graph.add_to_collection(
+                    "all_intents_embed_in", self.all_intents_embed_in
+                )
+                self.graph.clear_collection("sim_all")
+                self.graph.add_to_collection("sim_all", self.sim_all)
 
-                self.graph.clear_collection('word_embed')
-                self.graph.add_to_collection('word_embed',
-                                             self.word_embed)
-                self.graph.clear_collection('intent_embed')
-                self.graph.add_to_collection('intent_embed',
-                                             self.intent_embed)
+                self.graph.clear_collection("word_embed")
+                self.graph.add_to_collection("word_embed", self.word_embed)
+                self.graph.clear_collection("intent_embed")
+                self.graph.add_to_collection("intent_embed", self.intent_embed)
 
             saver = tf.train.Saver()
             saver.save(self.session, checkpoint)
 
-        placeholder_dims = {'a_in': np.int(self.a_in.shape[-1]),
-                            'b_in': np.int(self.b_in.shape[-1])}
-        with io.open(os.path.join(
-                model_dir,
-                file_name + "_placeholder_dims.pkl"), 'wb') as f:
+        placeholder_dims = {
+            "a_in": np.int(self.a_in.shape[-1]),
+            "b_in": np.int(self.b_in.shape[-1]),
+        }
+        with io.open(
+            os.path.join(model_dir, file_name + "_placeholder_dims.pkl"), "wb"
+        ) as f:
             pickle.dump(placeholder_dims, f)
-        with io.open(os.path.join(
-                model_dir,
-                file_name + "_inv_intent_dict.pkl"), 'wb') as f:
+        with io.open(
+            os.path.join(model_dir, file_name + "_inv_intent_dict.pkl"), "wb"
+        ) as f:
             pickle.dump(self.inv_intent_dict, f)
-        with io.open(os.path.join(
-                model_dir,
-                file_name + "_encoded_all_intents.pkl"), 'wb') as f:
+        with io.open(
+            os.path.join(model_dir, file_name + "_encoded_all_intents.pkl"), "wb"
+        ) as f:
             pickle.dump(self.encoded_all_intents, f)
-        with io.open(os.path.join(
-                model_dir,
-                file_name + "_all_intents_embed_values.pkl"), 'wb') as f:
+        with io.open(
+            os.path.join(model_dir, file_name + "_all_intents_embed_values.pkl"), "wb"
+        ) as f:
             pickle.dump(self.all_intents_embed_values, f)
 
         return {"file": file_name}
 
     @staticmethod
-    def _create_tf_gpu_predict_embed(meta, x_in: 'tf.Tensor',
-                                     layer_sizes: List[int], name: Text) -> 'tf.Tensor':
+    def _create_tf_gpu_predict_embed(
+        meta, x_in: "tf.Tensor", layer_sizes: List[int], name: Text
+    ) -> "tf.Tensor":
         """Used for prediction if gpu_lstm is true"""
 
         # mask different length sequences
@@ -1201,31 +1371,37 @@ class EmbeddingIntentClassifier(Component):
 
         x = tf.nn.relu(x_in)
 
-        if meta['bidirectional']:
-            with tf.variable_scope('rnn_encoder_{}'.format(name)):
-                single_cell = lambda: tf.contrib.cudnn_rnn.CudnnCompatibleLSTMCell(layer_sizes[0], reuse=tf.AUTO_REUSE)
+        if meta["bidirectional"]:
+            with tf.variable_scope("rnn_encoder_{}".format(name)):
+                single_cell = lambda: tf.contrib.cudnn_rnn.CudnnCompatibleLSTMCell(
+                    layer_sizes[0], reuse=tf.AUTO_REUSE
+                )
                 cells_fw = [single_cell() for _ in range(len(layer_sizes))]
                 cells_bw = [single_cell() for _ in range(len(layer_sizes))]
-                x, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(cells_fw, cells_bw, x,
-                                                                         dtype=tf.float32,
-                                                                         sequence_length=real_length)
+                x, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(
+                    cells_fw, cells_bw, x, dtype=tf.float32, sequence_length=real_length
+                )
         else:
-            with tf.variable_scope('rnn_encoder_{}'.format(name)):
-                single_cell = lambda: tf.contrib.cudnn_rnn.CudnnCompatibleLSTMCell(layer_sizes[0], reuse=tf.AUTO_REUSE)
+            with tf.variable_scope("rnn_encoder_{}".format(name)):
+                single_cell = lambda: tf.contrib.cudnn_rnn.CudnnCompatibleLSTMCell(
+                    layer_sizes[0], reuse=tf.AUTO_REUSE
+                )
                 # NOTE: Even if there's only one layer, the cell needs to be wrapped in
                 # MultiRNNCell.
-                cell = tf.nn.rnn_cell.MultiRNNCell([single_cell() for _ in range(len(layer_sizes))])
+                cell = tf.nn.rnn_cell.MultiRNNCell(
+                    [single_cell() for _ in range(len(layer_sizes))]
+                )
                 # Leave the scope arg unset.
-                x, _ = tf.nn.dynamic_rnn(cell, x, dtype=tf.float32, sequence_length=real_length)
+                x, _ = tf.nn.dynamic_rnn(
+                    cell, x, dtype=tf.float32, sequence_length=real_length
+                )
 
         x = tf.reduce_sum(x * last, 1)
 
         return x
 
     @staticmethod
-    def _tf_gpu_sim(meta,
-                    a: 'tf.Tensor',
-                    b: 'tf.Tensor') -> Tuple['tf.Tensor']:
+    def _tf_gpu_sim(meta, a: "tf.Tensor", b: "tf.Tensor") -> Tuple["tf.Tensor"]:
         """Define similarity
 
         in two cases:
@@ -1233,29 +1409,32 @@ class EmbeddingIntentClassifier(Component):
             sim_emb: between individual embedded intent labels only
         """
 
-        if meta['similarity_type'] == 'cosine':
+        if meta["similarity_type"] == "cosine":
             # normalize embedding vectors for cosine similarity
             a = tf.nn.l2_normalize(a, -1)
             b = tf.nn.l2_normalize(b, -1)
 
-        if meta['similarity_type'] in {'cosine', 'inner'}:
+        if meta["similarity_type"] in {"cosine", "inner"}:
             sim = tf.reduce_sum(tf.expand_dims(a, 1) * b, -1)
 
             return sim
 
         else:
-            raise ValueError("Wrong similarity type {}, "
-                             "should be 'cosine' or 'inner'"
-                             "".format(meta['similarity_type']))
+            raise ValueError(
+                "Wrong similarity type {}, "
+                "should be 'cosine' or 'inner'"
+                "".format(meta["similarity_type"])
+            )
 
     @classmethod
-    def load(cls,
-             meta: Dict[Text, Any],
-             model_dir: Text = None,
-             model_metadata: 'Metadata' = None,
-             cached_component: Optional['EmbeddingIntentClassifier'] = None,
-             **kwargs: Any
-             ) -> 'EmbeddingIntentClassifier':
+    def load(
+        cls,
+        meta: Dict[Text, Any],
+        model_dir: Text = None,
+        model_metadata: "Metadata" = None,
+        cached_component: Optional["EmbeddingIntentClassifier"] = None,
+        **kwargs: Any
+    ) -> "EmbeddingIntentClassifier":
 
         if model_dir and meta.get("file"):
             file_name = meta.get("file")
@@ -1264,77 +1443,134 @@ class EmbeddingIntentClassifier(Component):
             graph = tf.Graph()
             with graph.as_default():
                 sess = tf.Session()
-                if meta['gpu_lstm']:
+                if meta["gpu_lstm"]:
                     # rebuild tf graph for prediction
-                    with io.open(os.path.join(
-                            model_dir,
-                            file_name + "_placeholder_dims.pkl"), 'rb') as f:
+                    with io.open(
+                        os.path.join(model_dir, file_name + "_placeholder_dims.pkl"),
+                        "rb",
+                    ) as f:
                         placeholder_dims = pickle.load(f)
-                    reg = tf.contrib.layers.l2_regularizer(meta['C2'])
+                    reg = tf.contrib.layers.l2_regularizer(meta["C2"])
 
-                    a_in = tf.placeholder(tf.float32, (None, None, placeholder_dims['a_in']),
-                                          name='a')
-                    b_in = tf.placeholder(tf.float32, (None, None, placeholder_dims['b_in']),
-                                          name='b')
-                    a = cls._create_tf_gpu_predict_embed(meta, a_in,
-                                                         meta['hidden_layers_sizes_a'],
-                                                         name='a_and_b' if meta['share_embedding'] else 'a')
-                    word_embed = tf.layers.dense(inputs=a,
-                                                 units=meta['embed_dim'],
-                                                 kernel_regularizer=reg,
-                                                 name='embed_layer_{}'.format('a'),
-                                                 reuse=tf.AUTO_REUSE)
+                    a_in = tf.placeholder(
+                        tf.float32, (None, None, placeholder_dims["a_in"]), name="a"
+                    )
+                    b_in = tf.placeholder(
+                        tf.float32, (None, None, placeholder_dims["b_in"]), name="b"
+                    )
+                    a = cls._create_tf_gpu_predict_embed(
+                        meta,
+                        a_in,
+                        meta["hidden_layers_sizes_a"],
+                        name="a_and_b" if meta["share_embedding"] else "a",
+                    )
+                    word_embed = tf.layers.dense(
+                        inputs=a,
+                        units=meta["embed_dim"],
+                        kernel_regularizer=reg,
+                        name="embed_layer_{}".format("a"),
+                        reuse=tf.AUTO_REUSE,
+                    )
 
-                    b = cls._create_tf_gpu_predict_embed(meta, b_in,
-                                                         meta['hidden_layers_sizes_b'],
-                                                         name='a_and_b' if meta['share_embedding'] else 'b')
-                    intent_embed = tf.layers.dense(inputs=b,
-                                                   units=meta['embed_dim'],
-                                                   kernel_regularizer=reg,
-                                                   name='embed_layer_{}'.format('b'),
-                                                   reuse=tf.AUTO_REUSE)
+                    b = cls._create_tf_gpu_predict_embed(
+                        meta,
+                        b_in,
+                        meta["hidden_layers_sizes_b"],
+                        name="a_and_b" if meta["share_embedding"] else "b",
+                    )
+                    intent_embed = tf.layers.dense(
+                        inputs=b,
+                        units=meta["embed_dim"],
+                        kernel_regularizer=reg,
+                        name="embed_layer_{}".format("b"),
+                        reuse=tf.AUTO_REUSE,
+                    )
 
-                    tiled_intent_embed = cls._tf_sample_neg(intent_embed, None, None,
-                                                            tf.shape(word_embed)[0])
+                    tiled_intent_embed = cls._tf_sample_neg(
+                        intent_embed, None, None, tf.shape(word_embed)[0]
+                    )
 
                     sim_op = cls._tf_gpu_sim(meta, word_embed, tiled_intent_embed)
 
-                    all_intents_embed_in = tf.placeholder(tf.float32, (None, None, meta['embed_dim']),
-                                                          name='all_intents_embed')
+                    all_intents_embed_in = tf.placeholder(
+                        tf.float32,
+                        (None, None, meta["embed_dim"]),
+                        name="all_intents_embed",
+                    )
                     sim_all = cls._tf_gpu_sim(meta, word_embed, all_intents_embed_in)
 
                     saver = tf.train.Saver()
 
                 else:
-                    saver = tf.train.import_meta_graph(checkpoint + '.meta')
+                    saver = tf.train.import_meta_graph(checkpoint + ".meta")
 
                     # iterator = tf.get_collection('data_iterator')[0]
 
-                    a_in = tf.get_collection('message_placeholder')[0]
-                    b_in = tf.get_collection('intent_placeholder')[0]
+                    a_in = tf.get_collection("message_placeholder")[0]
+                    b_in = tf.get_collection("intent_placeholder")[0]
 
-                    sim_op = tf.get_collection('similarity_op')[0]
+                    sim_op = tf.get_collection("similarity_op")[0]
 
-                    all_intents_embed_in = tf.get_collection('all_intents_embed_in')[0]
-                    sim_all = tf.get_collection('sim_all')[0]
+                    all_intents_embed_in = tf.get_collection("all_intents_embed_in")[0]
+                    sim_all = tf.get_collection("sim_all")[0]
 
-                    word_embed = tf.get_collection('word_embed')[0]
-                    intent_embed = tf.get_collection('intent_embed')[0]
+                    word_embed = tf.get_collection("word_embed")[0]
+                    intent_embed = tf.get_collection("intent_embed")[0]
 
                 saver.restore(sess, checkpoint)
 
-            with io.open(os.path.join(
-                    model_dir,
-                    file_name + "_inv_intent_dict.pkl"), 'rb') as f:
+            with io.open(
+                os.path.join(model_dir, file_name + "_inv_intent_dict.pkl"), "rb"
+            ) as f:
                 inv_intent_dict = pickle.load(f)
-            with io.open(os.path.join(
-                    model_dir,
-                    file_name + "_encoded_all_intents.pkl"), 'rb') as f:
+            with io.open(
+                os.path.join(model_dir, file_name + "_encoded_all_intents.pkl"), "rb"
+            ) as f:
                 encoded_all_intents = pickle.load(f)
-            with io.open(os.path.join(
-                    model_dir,
-                    file_name + "_all_intents_embed_values.pkl"), 'rb') as f:
+            with io.open(
+                os.path.join(model_dir, file_name + "_all_intents_embed_values.pkl"),
+                "rb",
+            ) as f:
                 all_intents_embed_values = pickle.load(f)
+
+            ###################################################################
+            # quantisation
+            ###################################################################
+            quantise = True
+            n_clusters = 128
+
+            if quantise:
+                with graph.as_default():
+                    vars_to_quantise = [
+                        v.name
+                        for v in graph.get_collection(
+                            tf.GraphKeys.TRAINABLE_VARIABLES, scope="transformer_a"
+                        )
+                    ]
+                    quantise_ops = []
+
+                    for name in vars_to_quantise:
+                        print ("Quantising '{}'...".format(name))
+                        scope = "/".join(name.split("/")[:-1])
+                        var = [
+                            v
+                            for v in graph.get_collection(
+                                tf.GraphKeys.GLOBAL_VARIABLES, scope=scope
+                            )
+                            if v.name == name
+                        ][0]
+                        quantise_op = quantise_var(
+                            var,
+                            name=name,
+                            graph=graph,
+                            sess=sess,
+                            scope=scope,
+                            n_clusters=n_clusters,
+                        )
+                        quantise_ops.append(quantise_op)
+
+                    sess.run(quantise_ops)
+            ###################################################################
 
             return cls(
                 component_config=meta,
@@ -1353,10 +1589,86 @@ class EmbeddingIntentClassifier(Component):
             )
 
         else:
-            logger.warning("Failed to load nlu model. Maybe path {} "
-                           "doesn't exist"
-                           "".format(os.path.abspath(model_dir)))
+            logger.warning(
+                "Failed to load nlu model. Maybe path {} "
+                "doesn't exist"
+                "".format(os.path.abspath(model_dir))
+            )
             return cls(component_config=meta)
+
+
+def quantise_var(var, name, graph, sess, scope, n_clusters=256):
+    with graph.as_default():
+        orig_shape = var.shape
+        w_raw = sess.run(var)
+
+        unique_vals = get_unique_from_2d(w_raw)
+        if len(unique_vals) < n_clusters:
+            print (
+                "Number of unique values ({}) is less than the number of clusters ({}).".format(
+                    len(unique_vals), n_clusters
+                )
+            )
+            weights, weight_table = quantise_params(
+                w_raw, len(unique_vals), var.name.split(":")[0]
+            )
+        else:
+            weights, weight_table = quantise_params(
+                w_raw, n_clusters, var.name.split(":")[0]
+            )
+
+        weights_quantised = tf.gather(params=weight_table, indices=weights)
+        sess.run(tf.initialize_variables([weight_table, weights]))
+
+        weights_quantised = tf.reshape(weights_quantised, orig_shape)
+        quantise_op = tf.assign(
+            var, weights_quantised, name=name.split(":")[0] + "_replace_by_quantised"
+        )
+
+        return quantise_op
+
+
+def get_unique_from_2d(arr):
+    u = np.unique(arr.flatten())
+    return u
+
+
+def quantise_params(params, n_clusters, name):
+    flat_params = params.flatten().reshape((-1, 1))
+    min_weight, max_weight = (
+        np.min(flat_params).item() * 10,
+        np.max(flat_params).item() * 10,
+    )
+    spacing = (max_weight - min_weight) / (n_clusters + 1)
+    init_centroid_values = (
+        np.linspace(min_weight + spacing, max_weight - spacing, n_clusters) / 10
+    )
+    init_centroid_values = init_centroid_values.reshape(-1, 1)
+
+    np.random.seed(42)
+    kmeans = MiniBatchKMeans(
+        n_clusters,
+        init=init_centroid_values,
+        n_init=1,
+        max_iter=100,
+        init_size=max(300, 3 * n_clusters),
+        verbose=False,
+    )
+    kmeans.fit(flat_params)
+
+    centroid_idxs = kmeans.predict(flat_params)
+    centroids = np.array([centroid[0] for centroid in kmeans.cluster_centers_])
+    centroid_table = tf.get_variable(
+        name + "-centroid_table", dtype=tf.float32, initializer=tf.constant(centroids)
+    )
+    quantised_pointers = tf.get_variable(
+        name + "-quantised_pointers",
+        dtype=tf.int32,
+        initializer=tf.constant(centroid_idxs.astype(np.int32)),
+        trainable=False,
+    )
+
+    return quantised_pointers, centroid_table
 
 
 class ChronoBiasLayerNormBasicLSTMCell(tf.contrib.rnn.LayerNormBasicLSTMCell):
@@ -1369,18 +1681,20 @@ class ChronoBiasLayerNormBasicLSTMCell(tf.contrib.rnn.LayerNormBasicLSTMCell):
         for details about chrono initialization
     """
 
-    def __init__(self,
-                 num_units,
-                 forget_bias=1.0,
-                 input_bias=0.0,
-                 activation=tf.tanh,
-                 layer_norm=True,
-                 norm_gain=1.0,
-                 norm_shift=0.0,
-                 dropout_keep_prob=1.0,
-                 dropout_prob_seed=None,
-                 out_layer_size=None,
-                 reuse=None):
+    def __init__(
+        self,
+        num_units,
+        forget_bias=1.0,
+        input_bias=0.0,
+        activation=tf.tanh,
+        layer_norm=True,
+        norm_gain=1.0,
+        norm_shift=0.0,
+        dropout_keep_prob=1.0,
+        dropout_prob_seed=None,
+        out_layer_size=None,
+        reuse=None,
+    ):
         """Initializes the basic LSTM cell
 
         Additional args:
@@ -1397,7 +1711,7 @@ class ChronoBiasLayerNormBasicLSTMCell(tf.contrib.rnn.LayerNormBasicLSTMCell):
             norm_shift=norm_shift,
             dropout_keep_prob=dropout_keep_prob,
             dropout_prob_seed=dropout_prob_seed,
-            reuse=reuse
+            reuse=reuse,
         )
         self._input_bias = input_bias
         self._out_layer_size = out_layer_size
@@ -1408,20 +1722,15 @@ class ChronoBiasLayerNormBasicLSTMCell(tf.contrib.rnn.LayerNormBasicLSTMCell):
 
     @property
     def state_size(self):
-        return tf.contrib.rnn.LSTMStateTuple(self._num_units,
-                                             self.output_size)
+        return tf.contrib.rnn.LSTMStateTuple(self._num_units, self.output_size)
 
     @staticmethod
     def _dense_layer(args, layer_size):
         """Optional out projection layer"""
         proj_size = args.get_shape()[-1]
         dtype = args.dtype
-        weights = tf.get_variable("kernel",
-                                  [proj_size, layer_size],
-                                  dtype=dtype)
-        bias = tf.get_variable("bias",
-                               [layer_size],
-                               dtype=dtype)
+        weights = tf.get_variable("kernel", [proj_size, layer_size], dtype=dtype)
+        bias = tf.get_variable("bias", [layer_size], dtype=dtype)
         out = tf.nn.bias_add(tf.matmul(args, weights), bias)
         return out
 
@@ -1443,8 +1752,9 @@ class ChronoBiasLayerNormBasicLSTMCell(tf.contrib.rnn.LayerNormBasicLSTMCell):
         if (not isinstance(self._keep_prob, float)) or self._keep_prob < 1:
             g = tf.nn.dropout(g, self._keep_prob, seed=self._seed)
 
-        new_c = (c * tf.sigmoid(f + self._forget_bias) +
-                 g * tf.sigmoid(i + self._input_bias))  # added input_bias
+        new_c = c * tf.sigmoid(f + self._forget_bias) + g * tf.sigmoid(
+            i + self._input_bias
+        )  # added input_bias
 
         # do not do layer normalization on the new c,
         # because there are no trainable weights
@@ -1459,7 +1769,7 @@ class ChronoBiasLayerNormBasicLSTMCell(tf.contrib.rnn.LayerNormBasicLSTMCell):
 
         # add postprocessing of the output
         if self._out_layer_size is not None:
-            with tf.variable_scope('out_layer'):
+            with tf.variable_scope("out_layer"):
                 new_h = self._dense_layer(new_h, self._out_layer_size)
 
         new_state = tf.contrib.rnn.LSTMStateTuple(new_c, new_h)
