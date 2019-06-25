@@ -496,6 +496,8 @@ class EmbeddingIntentClassifier(Component):
             if not self.bidirectional:
                 hparams.unidirectional_encoder = True
 
+            hparams.use_pad_remover = False
+
             # When not in training mode, set all forms of dropout to zero.
             for key, value in hparams.values().items():
                 if key.endswith("dropout") or key == "label_smoothing":
@@ -845,6 +847,7 @@ class EmbeddingIntentClassifier(Component):
                 shape = (tf.shape(sparse)[0], units)
             else:
                 shape = (tf.shape(sparse)[0], tf.shape(sparse)[1], units)
+        print (shape)
 
         return tf.cast(tf.reshape(tf.sparse_tensor_to_dense(sparse), shape), tf.float32)
 
@@ -900,7 +903,8 @@ class EmbeddingIntentClassifier(Component):
 
             X_tensor = self._to_sparse_tensor(X)
             Y_tensor = self._to_sparse_tensor(Y)
-
+            print (X_tensor.shape)
+            print (Y_tensor.shape)
             batch_size_in = tf.placeholder(tf.int64)
             train_dataset = tf.data.Dataset.from_tensor_slices((X_tensor, Y_tensor))
             train_dataset = train_dataset.shuffle(buffer_size=len(X))
@@ -1437,6 +1441,16 @@ class EmbeddingIntentClassifier(Component):
     ) -> "EmbeddingIntentClassifier":
 
         if model_dir and meta.get("file"):
+            obj = cls.create_simpler_graph(
+                meta=meta,
+                model_dir=model_dir,
+                model_metadata=model_metadata,
+                cached_component=cached_component,
+            )
+            writer = tf.summary.FileWriter(logdir="tfgraph-simple", graph=obj.graph)
+            writer.flush()
+            return obj
+
             file_name = meta.get("file")
             checkpoint = os.path.join(model_dir, file_name + ".ckpt")
 
@@ -1533,43 +1547,33 @@ class EmbeddingIntentClassifier(Component):
             ) as f:
                 all_intents_embed_values = pickle.load(f)
 
+            # print("Original graph")
+            # [print(v.name, v.shape) for v in graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
+            # exit(0)
             ###################################################################
             # quantisation
             ###################################################################
-            quantise = True
-            n_clusters = 128
-
-            if quantise:
-                with graph.as_default():
-                    vars_to_quantise = [
-                        v.name
-                        for v in graph.get_collection(
-                            tf.GraphKeys.TRAINABLE_VARIABLES, scope="transformer_a"
-                        )
-                    ]
-                    quantise_ops = []
-
-                    for name in vars_to_quantise:
-                        print ("Quantising '{}'...".format(name))
-                        scope = "/".join(name.split("/")[:-1])
-                        var = [
-                            v
-                            for v in graph.get_collection(
-                                tf.GraphKeys.GLOBAL_VARIABLES, scope=scope
-                            )
-                            if v.name == name
-                        ][0]
-                        quantise_op = quantise_var(
-                            var,
-                            name=name,
-                            graph=graph,
-                            sess=sess,
-                            scope=scope,
-                            n_clusters=n_clusters,
-                        )
-                        quantise_ops.append(quantise_op)
-
-                    sess.run(quantise_ops)
+            vars_embed_in = [
+                v.name
+                for v in graph.get_collection(
+                    tf.GraphKeys.TRAINABLE_VARIABLES, scope="transformer_embed_layer_a"
+                )
+            ]
+            vars_embed_out = [
+                v.name
+                for v in graph.get_collection(
+                    tf.GraphKeys.TRAINABLE_VARIABLES, scope="embed_layer_a"
+                )
+            ]
+            vars_transformer = [
+                v.name
+                for v in graph.get_collection(
+                    tf.GraphKeys.TRAINABLE_VARIABLES, scope="transformer_a"
+                )
+            ]
+            quantise_vars(vars_embed_in, 256, graph, sess)
+            quantise_vars(vars_embed_out, 256, graph, sess)
+            quantise_vars(vars_transformer, 2, graph, sess)
             ###################################################################
 
             return cls(
@@ -1595,6 +1599,293 @@ class EmbeddingIntentClassifier(Component):
                 "".format(os.path.abspath(model_dir))
             )
             return cls(component_config=meta)
+
+    @classmethod
+    def transformer_prediction(
+        cls,
+        x_in: "tf.Tensor",
+        meta: Dict[Text, Any],
+        layer_sizes: List[int],
+        name: Text,
+    ) -> "tf.Tensor":
+        reg = tf.contrib.layers.l2_regularizer(meta["C2"])
+        # mask different length sequences
+        mask = tf.sign(tf.reduce_max(x_in, -1))
+        last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
+        mask = tf.cumsum(last, axis=1, reverse=True)
+
+        last = tf.expand_dims(last, -1)
+
+        x = tf.nn.relu(x_in)
+
+        if len(layer_sizes) == 0:
+            # return simple bag of words
+            return tf.reduce_sum(x, 1)
+
+        hparams = transformer_small()
+
+        hparams.num_hidden_layers = len(layer_sizes)
+        hparams.hidden_size = layer_sizes[0]
+        # it seems to be factor of 4 for transformer architectures in t2t
+        hparams.filter_size = layer_sizes[0] * 4
+        hparams.num_heads = meta["num_heads"]
+        # hparams.relu_dropout = self.droprate
+        hparams.pos = meta["pos_encoding"]
+
+        hparams.max_length = meta["max_seq_length"]
+        if not meta["bidirectional"]:
+            hparams.unidirectional_encoder = True
+
+        # When not in training mode, set all forms of dropout to zero.
+        for key, value in hparams.values().items():
+            if key.endswith("dropout") or key == "label_smoothing":
+                setattr(hparams, key, value * 0)
+
+        x = tf.layers.dense(
+            inputs=x,
+            units=hparams.hidden_size,
+            use_bias=False,
+            kernel_initializer=tf.random_normal_initializer(
+                0.0, hparams.hidden_size ** -0.5
+            ),
+            kernel_regularizer=reg,
+            name="transformer_embed_layer_{}".format(name),
+            reuse=tf.AUTO_REUSE,
+        )
+
+        if hparams.multiply_embedding_mode == "sqrt_depth":
+            x *= hparams.hidden_size ** 0.5
+
+        x *= tf.expand_dims(mask, -1)
+
+        with tf.variable_scope("transformer_{}".format(name), reuse=tf.AUTO_REUSE):
+            (
+                x,
+                self_attention_bias,
+                encoder_decoder_attention_bias,
+            ) = transformer_prepare_encoder(x, None, hparams)
+
+            if hparams.pos == "custom_timing":
+                x = add_timing_signal_1d(x, max_timescale=self.pos_max_timescale)
+
+            x *= tf.expand_dims(mask, -1)
+
+            x = tf.nn.dropout(x, 1.0 - hparams.layer_prepostprocess_dropout)
+
+            attn_bias_for_padding = None
+            # Otherwise the encoder will just use encoder_self_attention_bias.
+            if hparams.unidirectional_encoder:
+                attn_bias_for_padding = encoder_decoder_attention_bias
+
+            x = transformer_encoder(
+                x,
+                self_attention_bias,
+                hparams,
+                nonpadding=mask,
+                attn_bias_for_padding=attn_bias_for_padding,
+            )
+
+        if meta["use_last"]:
+            x = tf.reduce_sum(x * last, 1)
+        else:
+            x *= tf.expand_dims(mask, -1)
+            sum_mask = tf.reduce_sum(tf.expand_dims(mask, -1), 1)
+            # fix for zero length sequences
+            sum_mask = tf.where(sum_mask < 1, tf.ones_like(sum_mask), sum_mask)
+            x = tf.reduce_sum(x, 1) / sum_mask
+
+        return x
+
+    @classmethod
+    def _tf_sim_static(
+        cls, a: "tf.Tensor", b: "tf.Tensor", meta: Dict[Text, Any]
+    ) -> Tuple["tf.Tensor", "tf.Tensor", "tf.Tensor"]:
+        """Define similarity
+
+        in two cases:
+            sim: between embedded words and embedded intent labels
+            sim_emb: between individual embedded intent labels only
+        """
+
+        if meta["similarity_type"] == "cosine":
+            # normalize embedding vectors for cosine similarity
+            a = tf.nn.l2_normalize(a, -1)
+            b = tf.nn.l2_normalize(b, -1)
+
+        if len(a.shape) == 3:
+            a_pos = a[:, :1, :]
+        else:
+            a_pos = tf.expand_dims(a, 1)
+
+        if meta["similarity_type"] in {"cosine", "inner"}:
+            sim = tf.reduce_sum(a_pos * b, -1)
+            sim_intent_emb = tf.reduce_sum(b[:, :1, :] * b[:, 1:, :], -1)
+            if len(a.shape) == 3:
+                sim_input_emb = tf.reduce_sum(a[:, :1, :] * a[:, 1:, :], -1)
+            else:
+                sim_input_emb = None
+
+            return sim, sim_intent_emb, sim_input_emb
+
+        else:
+            raise ValueError(
+                "Wrong similarity type {}, "
+                "should be 'cosine' or 'inner'"
+                "".format(meta["similarity_type"])
+            )
+
+    # noinspection PyPep8Naming
+    @classmethod
+    def create_simpler_graph(
+        cls,
+        meta: Dict[Text, Any],
+        model_dir: Text = None,
+        model_metadata: "Metadata" = None,
+        cached_component: Optional["EmbeddingIntentClassifier"] = None,
+        **kwargs: Any
+    ) -> "EmbeddingIntentClassifier":
+
+        file_name = meta.get("file")
+        checkpoint = os.path.join(model_dir, file_name + ".ckpt")
+
+        graph = tf.Graph()
+        with graph.as_default():
+            sess = tf.Session()
+
+            with io.open(
+                os.path.join(model_dir, file_name + "_placeholder_dims.pkl"), "rb"
+            ) as f:
+                placeholder_dims = pickle.load(f)
+            with io.open(
+                os.path.join(model_dir, file_name + "_inv_intent_dict.pkl"), "rb"
+            ) as f:
+                inv_intent_dict = pickle.load(f)
+            with io.open(
+                os.path.join(model_dir, file_name + "_encoded_all_intents.pkl"), "rb"
+            ) as f:
+                encoded_all_intents = pickle.load(f)
+            with io.open(
+                os.path.join(model_dir, file_name + "_all_intents_embed_values.pkl"),
+                "rb",
+            ) as f:
+                all_intents_embed_values = pickle.load(f)
+
+            """
+            print(all_intents_embed_values.shape)
+            num_intents = len(inv_intent_dict.keys())
+            print("# intents", num_intents)
+            intent_dict = {v: k for k, v in inv_intent_dict.items()}
+            print(meta["hidden_layers_sizes_a"])
+            """
+
+            ## prediction graph
+            batch_size = 1
+            all_intents_embed_in = tf.placeholder(
+                tf.float32, all_intents_embed_values.shape, name="all_intents_embed"
+            )
+            a_in_weird_shape = tf.placeholder(
+                tf.float32, (None, batch_size, placeholder_dims["a_in"]), name="a_weird"
+            )
+            b_in_weird_shape = tf.placeholder(
+                tf.float32, (None, batch_size, placeholder_dims["b_in"]), name="b_weird"
+            )
+            a_in = tf.transpose(a_in_weird_shape, [1, 0, 2], name="a")
+            b_in = tf.transpose(b_in_weird_shape, [1, 0, 2], name="b")
+
+            a = cls.transformer_prediction(
+                a_in, meta, meta["hidden_layers_sizes_a"], name="a"
+            )
+
+            reg = tf.contrib.layers.l2_regularizer(meta["C2"])
+            word_embed = tf.layers.dense(
+                inputs=a,
+                units=meta["embed_dim"],
+                kernel_regularizer=reg,
+                name="embed_layer_{}".format("a"),
+                reuse=tf.AUTO_REUSE,
+            )
+            b = cls.transformer_prediction(
+                b_in, meta, meta["hidden_layers_sizes_b"], name="b"
+            )
+            reg = tf.contrib.layers.l2_regularizer(meta["C2"])
+            intent_embed = tf.layers.dense(
+                inputs=b,
+                units=meta["embed_dim"],
+                kernel_regularizer=reg,
+                name="embed_layer_{}".format("b"),
+                reuse=tf.AUTO_REUSE,
+            )
+
+            all_b = intent_embed[tf.newaxis, :, :]
+            tiled_intent_embed = tf.tile(all_b, [batch_size, 1, 1])
+
+            sim_op, _, _ = cls._tf_sim_static(word_embed, tiled_intent_embed, meta)
+
+            sim_all, _, _ = cls._tf_sim_static(word_embed, all_intents_embed_in, meta)
+            # print("Simple graph")
+            # [print(v.name, v.shape) for v in graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
+
+            saver = tf.train.Saver()
+            saver.restore(sess, checkpoint)
+
+            ###################################################################
+            # quantisation
+            # problematic ops: Cumprod, Cumsum, ScatterNd
+            in_tensors = [a_in_weird_shape, b_in_weird_shape]
+            out_tensors = [sim_op, sim_all]
+            converter = tf.lite.TFLiteConverter.from_session(
+                sess, in_tensors, out_tensors
+            )
+            converter.target_ops = [
+                tf.lite.OpsSet.TFLITE_BUILTINS,
+                tf.lite.OpsSet.SELECT_TF_OPS,
+            ]
+            tflite_model = converter.convert()
+            open("tflite/converted_model.tflite", "wb").write(tflite_model)
+            ###################################################################
+
+            return cls(
+                component_config=meta,
+                inv_intent_dict=inv_intent_dict,
+                encoded_all_intents=encoded_all_intents,
+                all_intents_embed_values=all_intents_embed_values,
+                session=sess,
+                graph=graph,
+                message_placeholder=a_in,
+                intent_placeholder=b_in,
+                similarity_op=sim_op,
+                all_intents_embed_in=all_intents_embed_in,
+                sim_all=sim_all,
+                word_embed=word_embed,
+                intent_embed=intent_embed,
+            )
+
+
+def quantise_vars(vars, n_clusters, graph, sess):
+    with graph.as_default():
+        quantise_ops = []
+
+        for name in vars:
+            print ("Quantising '{}'...".format(name))
+            scope = "/".join(name.split("/")[:-1])
+            var = [
+                v
+                for v in graph.get_collection(
+                    tf.GraphKeys.GLOBAL_VARIABLES, scope=scope
+                )
+                if v.name == name
+            ][0]
+            quantise_op = quantise_var(
+                var,
+                name=name,
+                graph=graph,
+                sess=sess,
+                scope=scope,
+                n_clusters=n_clusters,
+            )
+            quantise_ops.append(quantise_op)
+
+        sess.run(quantise_ops)
 
 
 def quantise_var(var, name, graph, sess, scope, n_clusters=256):
