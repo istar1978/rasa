@@ -152,6 +152,7 @@ class EmbeddingIntentClassifier(Component):
         sim_all: Optional["tf.Tensor"] = None,
         word_embed: Optional["tf.Tensor"] = None,
         intent_embed: Optional["tf.Tensor"] = None,
+        weird_input_shape=False,
     ) -> None:
         """Declare instant variables with default values"""
 
@@ -182,6 +183,11 @@ class EmbeddingIntentClassifier(Component):
         # persisted embeddings
         self.word_embed = word_embed
         self.intent_embed = intent_embed
+
+        # Whether the inputs at inference time need to be resized to the shape
+        # [seq_length, batch_size, num_channels]. Needed when we convert to TFLite,
+        # which requires only first input dimension to be of unknown length.
+        self.weird_input_shape = weird_input_shape
 
     # init helpers
     def _load_nn_architecture_params(self, config: Dict[Text, Any]) -> None:
@@ -495,8 +501,6 @@ class EmbeddingIntentClassifier(Component):
             hparams.max_length = self.max_seq_length
             if not self.bidirectional:
                 hparams.unidirectional_encoder = True
-
-            hparams.use_pad_remover = False
 
             # When not in training mode, set all forms of dropout to zero.
             for key, value in hparams.values().items():
@@ -1031,6 +1035,9 @@ class EmbeddingIntentClassifier(Component):
                     self.word_embed, self.all_intents_embed_in
                 )
 
+            writer = tf.summary.FileWriter(logdir="tfgraph-full", graph=self.graph)
+            writer.flush()
+
     def _train_tf_dataset(
         self,
         train_init_op,
@@ -1190,13 +1197,25 @@ class EmbeddingIntentClassifier(Component):
     ) -> Tuple[np.ndarray, List[float]]:
         """Load tf graph and calculate message similarities"""
 
-        message_sim = self.session.run(
-            self.sim_all,
-            feed_dict={
-                self.a_in: X,
-                self.all_intents_embed_in: self.all_intents_embed_values,
-            },
-        )
+        if self.weird_input_shape:
+            X_T = np.transpose(X, axes=[1, 0, 2])
+
+            message_sim = self.session.run(
+                self.sim_all,
+                feed_dict={
+                    self.a_in: X_T,
+                    self.all_intents_embed_in: self.all_intents_embed_values,
+                },
+            )
+        else:
+            message_sim = self.session.run(
+                self.sim_all,
+                feed_dict={
+                    self.a_in: X,
+                    self.all_intents_embed_in: self.all_intents_embed_values,
+                },
+            )
+
         message_sim = message_sim.flatten()  # sim is a matrix
 
         intent_ids = message_sim.argsort()[::-1]
@@ -1441,15 +1460,22 @@ class EmbeddingIntentClassifier(Component):
     ) -> "EmbeddingIntentClassifier":
 
         if model_dir and meta.get("file"):
+            # """
+            model_file = "tflite/converted_model.tflite"
             obj = cls.create_simpler_graph(
                 meta=meta,
                 model_dir=model_dir,
                 model_metadata=model_metadata,
                 cached_component=cached_component,
+                model_file=model_file,
             )
-            writer = tf.summary.FileWriter(logdir="tfgraph-simple", graph=obj.graph)
-            writer.flush()
+            # cls.use_tflite_model(model_file=model_file)
+            # exit(0)
+
+            # writer = tf.summary.FileWriter(logdir="tfgraph-simple", graph=obj.graph)
+            # writer.flush()
             return obj
+            # """
 
             file_name = meta.get("file")
             checkpoint = os.path.join(model_dir, file_name + ".ckpt")
@@ -1553,27 +1579,30 @@ class EmbeddingIntentClassifier(Component):
             ###################################################################
             # quantisation
             ###################################################################
-            vars_embed_in = [
-                v.name
-                for v in graph.get_collection(
-                    tf.GraphKeys.TRAINABLE_VARIABLES, scope="transformer_embed_layer_a"
-                )
-            ]
-            vars_embed_out = [
-                v.name
-                for v in graph.get_collection(
-                    tf.GraphKeys.TRAINABLE_VARIABLES, scope="embed_layer_a"
-                )
-            ]
-            vars_transformer = [
-                v.name
-                for v in graph.get_collection(
-                    tf.GraphKeys.TRAINABLE_VARIABLES, scope="transformer_a"
-                )
-            ]
-            quantise_vars(vars_embed_in, 256, graph, sess)
-            quantise_vars(vars_embed_out, 256, graph, sess)
-            quantise_vars(vars_transformer, 2, graph, sess)
+            quantise = False
+            if quantise:
+                vars_embed_in = [
+                    v.name
+                    for v in graph.get_collection(
+                        tf.GraphKeys.TRAINABLE_VARIABLES,
+                        scope="transformer_embed_layer_a",
+                    )
+                ]
+                vars_embed_out = [
+                    v.name
+                    for v in graph.get_collection(
+                        tf.GraphKeys.TRAINABLE_VARIABLES, scope="embed_layer_a"
+                    )
+                ]
+                vars_transformer = [
+                    v.name
+                    for v in graph.get_collection(
+                        tf.GraphKeys.TRAINABLE_VARIABLES, scope="transformer_a"
+                    )
+                ]
+                quantise_vars(vars_embed_in, 256, graph, sess)
+                quantise_vars(vars_embed_out, 256, graph, sess)
+                quantise_vars(vars_transformer, 2, graph, sess)
             ###################################################################
 
             return cls(
@@ -1609,10 +1638,49 @@ class EmbeddingIntentClassifier(Component):
         name: Text,
     ) -> "tf.Tensor":
         reg = tf.contrib.layers.l2_regularizer(meta["C2"])
+
         # mask different length sequences
-        mask = tf.sign(tf.reduce_max(x_in, -1))
-        last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
-        mask = tf.cumsum(last, axis=1, reverse=True)
+        # mask = tf.sign(tf.reduce_max(x_in, -1)) # [B, L, C] -> [B, L] get 1 from one-hot vectors of real tokens, 0 from padded tokens
+        mask_raw = tf.reduce_max(tf.abs(x_in), -1)
+        mask = tf.cast(tf.greater(mask_raw, 0), dtype=tf.float32)
+
+        mask_inv = 1 - mask
+        # print(sess.run([mask, mask_inv]))
+        pad_pre = [[0, 0], [1, 0]]
+        pad_post = [[0, 0], [0, 1]]
+        mask_padded = tf.pad(mask, pad_post)
+        mask_inv_padded = tf.pad(mask_inv, pad_pre)
+        last = (1 - tf.abs(mask_padded - mask_inv_padded))[
+            :, 1:
+        ]  # [B, L] 1 in place of the last real token
+
+        # TOCO: Check failed: start_indices_size <= num_input_axes (3 vs. 2)StridedSlice op requires no more than 2 start indices
+
+        # new
+        # """
+        # print("Original mask shape", mask.shape)
+        # mask_raw = tf.reduce_max(tf.abs(x_in), -1)
+        # zeros = tf.zeros_like(mask_raw)
+        # mask = tf.cast(tf.greater(mask_raw, 0), dtype=tf.float32)
+        # print("New mask shape", mask.shape)
+
+        # mask_inv = 1 - mask
+        # pad_pre = [[0, 0], [1, 0]]
+        # pad_post = [[0, 0], [0, 1]]
+        # mask_padded = tf.pad(mask, pad_pre)
+        # mask_inv_padded = tf.pad(mask_inv, pad_post)
+        # last = (1 - tf.abs(mask_padded - mask_inv_padded))[
+        #     0, 1:
+        # ]  # [B, L] 1 in place of the last real token
+        # mask = tf.reduce_sum(mask, axis=1)  # [B] index of the last real token
+        # # """
+
+        # # old
+        # last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
+        # print(last.shape)
+        # mask = tf.cumsum(last, axis=1, reverse=True)
+        # print(mask.shape)
+        # # old
 
         last = tf.expand_dims(last, -1)
 
@@ -1623,6 +1691,8 @@ class EmbeddingIntentClassifier(Component):
             return tf.reduce_sum(x, 1)
 
         hparams = transformer_small()
+        hparams.use_pad_remover = False
+        hparams.self_attention_type = "dot_product_simplified"
 
         hparams.num_hidden_layers = len(layer_sizes)
         hparams.hidden_size = layer_sizes[0]
@@ -1656,7 +1726,7 @@ class EmbeddingIntentClassifier(Component):
         if hparams.multiply_embedding_mode == "sqrt_depth":
             x *= hparams.hidden_size ** 0.5
 
-        x *= tf.expand_dims(mask, -1)
+        x *= tf.expand_dims(mask, -1)  # temporary
 
         with tf.variable_scope("transformer_{}".format(name), reuse=tf.AUTO_REUSE):
             (
@@ -1668,7 +1738,7 @@ class EmbeddingIntentClassifier(Component):
             if hparams.pos == "custom_timing":
                 x = add_timing_signal_1d(x, max_timescale=self.pos_max_timescale)
 
-            x *= tf.expand_dims(mask, -1)
+            x *= tf.expand_dims(mask, -1)  # temporary
 
             x = tf.nn.dropout(x, 1.0 - hparams.layer_prepostprocess_dropout)
 
@@ -1681,13 +1751,13 @@ class EmbeddingIntentClassifier(Component):
                 x,
                 self_attention_bias,
                 hparams,
-                nonpadding=mask,
+                # nonpadding=mask,
                 attn_bias_for_padding=attn_bias_for_padding,
             )
 
         if meta["use_last"]:
             x = tf.reduce_sum(x * last, 1)
-        else:
+        else:  # temporary
             x *= tf.expand_dims(mask, -1)
             sum_mask = tf.reduce_sum(tf.expand_dims(mask, -1), 1)
             # fix for zero length sequences
@@ -1742,6 +1812,7 @@ class EmbeddingIntentClassifier(Component):
         model_dir: Text = None,
         model_metadata: "Metadata" = None,
         cached_component: Optional["EmbeddingIntentClassifier"] = None,
+        model_file="model.tflite",
         **kwargs: Any
     ) -> "EmbeddingIntentClassifier":
 
@@ -1770,14 +1841,6 @@ class EmbeddingIntentClassifier(Component):
             ) as f:
                 all_intents_embed_values = pickle.load(f)
 
-            """
-            print(all_intents_embed_values.shape)
-            num_intents = len(inv_intent_dict.keys())
-            print("# intents", num_intents)
-            intent_dict = {v: k for k, v in inv_intent_dict.items()}
-            print(meta["hidden_layers_sizes_a"])
-            """
-
             ## prediction graph
             batch_size = 1
             all_intents_embed_in = tf.placeholder(
@@ -1789,13 +1852,14 @@ class EmbeddingIntentClassifier(Component):
             b_in_weird_shape = tf.placeholder(
                 tf.float32, (None, batch_size, placeholder_dims["b_in"]), name="b_weird"
             )
-            a_in = tf.transpose(a_in_weird_shape, [1, 0, 2], name="a")
+            print (a_in_weird_shape.shape, b_in_weird_shape.shape)
+            # exit(0)
+            a_in = tf.transpose(a_in_weird_shape, [1, 0, 2], name="a")  # [B, L, C]
             b_in = tf.transpose(b_in_weird_shape, [1, 0, 2], name="b")
 
             a = cls.transformer_prediction(
                 a_in, meta, meta["hidden_layers_sizes_a"], name="a"
             )
-
             reg = tf.contrib.layers.l2_regularizer(meta["C2"])
             word_embed = tf.layers.dense(
                 inputs=a,
@@ -1804,6 +1868,7 @@ class EmbeddingIntentClassifier(Component):
                 name="embed_layer_{}".format("a"),
                 reuse=tf.AUTO_REUSE,
             )
+
             b = cls.transformer_prediction(
                 b_in, meta, meta["hidden_layers_sizes_b"], name="b"
             )
@@ -1822,28 +1887,51 @@ class EmbeddingIntentClassifier(Component):
             sim_op, _, _ = cls._tf_sim_static(word_embed, tiled_intent_embed, meta)
 
             sim_all, _, _ = cls._tf_sim_static(word_embed, all_intents_embed_in, meta)
-            # print("Simple graph")
-            # [print(v.name, v.shape) for v in graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
 
             saver = tf.train.Saver()
             saver.restore(sess, checkpoint)
 
+            # node_name = "transformer_a/encoder/layer_0/self_attention/multihead_attention/dot_product_attention/attention_weights"
+            # node_name = 'transformer_a/encoder/layer_0/self_attention/multihead_attention/matmul-qk-batch'
+            # node_name = 'transformer_a/encoder/layer_0/self_attention/multihead_attention/matmul-qk'
+            # node_name = 'transformer_a/encoder/layer_0/self_attention/multihead_attention/qk-3d-by-parts'
+            # node_name = 'transformer_a/encoder/layer_0/self_attention/multihead_attention/dot_product_attention/qk-batchify'
+
+            # subgraph = tf.graph_util.extract_sub_graph(
+            #     graph.as_graph_def(),
+            #     [node_name]
+            # )
+            # writer = tf.summary.FileWriter(logdir="tfgraph-simple", graph=subgraph)
+            writer = tf.summary.FileWriter(logdir="tfgraph-full", graph=graph)
+            writer.flush()
+            # exit(0)
+
+            # node_name = "transformer_a/encoder/layer_0/self_attention/multihead_attention/dot_product_attention/add"
+            # node = [n for n in graph.get_operations() if n.name == node_name][0]
+            # exit(0)
+
+            # """
             ###################################################################
             # quantisation
-            # problematic ops: Cumprod, Cumsum, ScatterNd
+            # use tensorflow 1.14.0 and tensorflow-probability 0.7.0
+            # problematic ops: Cumprod, Cumsum, ScatterNd -> solved
+            # problematic ops: BatchMatMul, Cos, Sign
+
             in_tensors = [a_in_weird_shape, b_in_weird_shape]
+            # in_tensors = [a_in_weird_shape]
             out_tensors = [sim_op, sim_all]
+            # out_tensors = [qk_4d_by_parts]
             converter = tf.lite.TFLiteConverter.from_session(
                 sess, in_tensors, out_tensors
             )
             converter.target_ops = [
                 tf.lite.OpsSet.TFLITE_BUILTINS,
-                tf.lite.OpsSet.SELECT_TF_OPS,
+                # tf.lite.OpsSet.SELECT_TF_OPS,
             ]
             tflite_model = converter.convert()
-            open("tflite/converted_model.tflite", "wb").write(tflite_model)
+            open(model_file, "wb").write(tflite_model)
             ###################################################################
-
+            # """
             return cls(
                 component_config=meta,
                 inv_intent_dict=inv_intent_dict,
@@ -1851,14 +1939,35 @@ class EmbeddingIntentClassifier(Component):
                 all_intents_embed_values=all_intents_embed_values,
                 session=sess,
                 graph=graph,
-                message_placeholder=a_in,
-                intent_placeholder=b_in,
+                message_placeholder=a_in_weird_shape,
+                intent_placeholder=b_in_weird_shape,
                 similarity_op=sim_op,
                 all_intents_embed_in=all_intents_embed_in,
                 sim_all=sim_all,
                 word_embed=word_embed,
                 intent_embed=intent_embed,
+                weird_input_shape=True,
             )
+
+    @classmethod
+    def use_tflite_model(cls, model_file):
+        # initialise the interpreter
+        interpreter = tf.lite.Interpreter(model_path=model_file)
+        interpreter.allocate_tensors()
+
+        # feed random data into it
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+        print (input_details)
+        print (output_details)
+        input_shape = input_details[0]["shape"]
+        input_data = np.array(np.random.random_sample(input_shape), dtype=np.float32)
+        interpreter.set_tensor(input_details[0]["index"], input_data)
+
+        # run it
+        interpreter.invoke()
+        output_data = interpreter.get_tensor(output_details[0]["index"])
+        print (output_data)
 
 
 def quantise_vars(vars, n_clusters, graph, sess):
