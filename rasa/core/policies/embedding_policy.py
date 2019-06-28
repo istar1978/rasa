@@ -86,11 +86,11 @@ class EmbeddingPolicy(Policy):
         "pos_encoding": "timing",  # {"timing", "emb", "custom_timing"}
         # introduce phase shift in time encodings between transformers
         # 0.5 - 0.8 works on small dataset
-        "pos_max_timescale": 1.0e2,
+        "pos_max_timescale": 1.0e1,
         "max_seq_length": 256,
         "num_heads": 4,
         # number of units in rnn cell
-        "rnn_size": 64,
+        "rnn_size": 128,
         "num_rnn_layers": 1,
         # training parameters
         # flag if to turn on layer normalization for lstm cell
@@ -790,14 +790,17 @@ class EmbeddingPolicy(Policy):
             )
 
     def _create_transformer_encoder(self, a_in, c_in, b_prev_in, mask, attention_weights):
-        x_in = tf.concat([a_in, c_in, b_prev_in], -1)
-        x = x_in
+        x_in = tf.concat([a_in, b_prev_in], -1)
+        # print(x_in.shape[-1])
+        # exit()
+
+        # x = x_in
         hparams = transformer_base()
 
         hparams.num_hidden_layers = self.num_rnn_layers
         hparams.hidden_size = self.rnn_size
         # it seems to be factor of 4 for transformer architectures in t2t
-        hparams.filter_size = self.rnn_size * 4
+        hparams.filter_size = hparams.hidden_size * 4
         hparams.num_heads = self.num_heads
         hparams.relu_dropout = self.droprate["rnn"]
         hparams.pos = self.pos_encoding
@@ -806,6 +809,10 @@ class EmbeddingPolicy(Policy):
 
         hparams.unidirectional_encoder = True
 
+        hparams.self_attention_type = "dot_product_relative_v2"
+        hparams.max_relative_position = 5
+        hparams.add_relative_to_values = True
+
         # hparams.proximity_bias = True
 
         # When not in training mode, set all forms of dropout to zero.
@@ -813,17 +820,45 @@ class EmbeddingPolicy(Policy):
             if key.endswith("dropout") or key == "label_smoothing":
                 setattr(hparams, key, value * tf.cast(self._is_training, tf.float32))
         reg = tf.contrib.layers.l2_regularizer(self.C2)
-        x = tf.layers.dense(inputs=x,
+
+        x = tf.layers.dense(inputs=x_in,
                             units=hparams.hidden_size,
                             use_bias=False,
                             kernel_initializer=tf.random_normal_initializer(0.0, hparams.hidden_size ** -0.5),
                             kernel_regularizer=reg,
                             name='transformer_embed_layer',
                             reuse=tf.AUTO_REUSE)
+        # a = tf.layers.dense(inputs=a_in,
+        #                     units=hparams.hidden_size/3,
+        #                     use_bias=False,
+        #                     kernel_initializer=tf.random_normal_initializer(0.0, hparams.hidden_size ** -0.5),
+        #                     kernel_regularizer=reg,
+        #                     name='transformer_embed_layer_a',
+        #                     reuse=tf.AUTO_REUSE)
+        #
+        c = tf.layers.dense(inputs=c_in,
+                            units=hparams.hidden_size,
+                            use_bias=False,
+                            kernel_initializer=tf.random_normal_initializer(0.0, hparams.hidden_size ** -0.5),
+                            kernel_regularizer=reg,
+                            name='transformer_embed_layer_c',
+                            reuse=tf.AUTO_REUSE)
+        #
+        # b = tf.layers.dense(inputs=b_prev_in,
+        #                     units=hparams.hidden_size/3,
+        #                     use_bias=False,
+        #                     kernel_initializer=tf.random_normal_initializer(0.0, hparams.hidden_size ** -0.5),
+        #                     kernel_regularizer=reg,
+        #                     name='transformer_embed_layer_b',
+        #                     reuse=tf.AUTO_REUSE)
+
+        # x = tf.concat([a, c, b], -1)
+
         x = tf.layers.dropout(x, rate=hparams.layer_prepostprocess_dropout, training=self._is_training)
 
         if hparams.multiply_embedding_mode == "sqrt_depth":
             x *= hparams.hidden_size ** 0.5
+            c *= hparams.hidden_size ** 0.5
 
         x *= tf.expand_dims(mask, -1)
 
@@ -854,9 +889,23 @@ class EmbeddingPolicy(Policy):
                 attn_bias_for_padding=attn_bias_for_padding,
             )
 
-        x *= tf.expand_dims(mask, -1)
+            # x = tf.concat([x, c_in], -1)
+            # c_gate = tf.layers.dense(inputs=x,
+            #                          # units=hparams.hidden_size,
+            #                          # activation=tf.nn.softmax,
+            #                          units=1,
+            #                          activation=tf.math.sigmoid,
+            #                          bias_initializer=tf.constant_initializer(-1),
+            #                          # use_bias=False,
+            #                          # kernel_initializer=tf.random_normal_initializer(0.0, hparams.hidden_size ** -0.5),
+            #                          kernel_regularizer=reg,
+            #                          name='slots_gate_layer_c',
+            #                          reuse=tf.AUTO_REUSE)
+            x += c #* c_gate
+            # x = common_layers.layer_postprocess(x, c, hparams)
+            x *= tf.expand_dims(mask, -1)
 
-        return x, self_attention_bias, x_in
+            return tf.nn.relu(x), self_attention_bias, x_in
 
     @staticmethod
     def _rearrange_fn(list_tensor_1d_mask_1d):
@@ -1182,9 +1231,16 @@ class EmbeddingPolicy(Policy):
             else:
                 sim_dial_emb = None
 
+            if len(embed_dialogue.shape) == 4:
+                sim_dial_bot_emb = tf.reduce_sum(
+                    embed_dialogue[:, :, :1, :] * embed_action[:, :, 1:, :], -1
+                ) * tf.expand_dims(mask, 2)
+            else:
+                sim_dial_bot_emb = None
+
             # output similarities between user input and bot actions
             # and similarities between bot actions
-            return sim,  sim_bot_emb, sim_dial_emb
+            return sim,  sim_bot_emb, sim_dial_emb, sim_dial_bot_emb
 
     # noinspection PyPep8Naming
     def _scale_loss_by_count_actions(
@@ -1197,21 +1253,48 @@ class EmbeddingPolicy(Policy):
         """Calculate inverse proportionality of repeated actions."""
 
         if self.scale_loss_by_action_counts:
-            full_X = tf.concat(
-                [X, slots, previous_actions, Y], -1
-            )
-            full_X = tf.reshape(full_X, (-1, full_X.shape[-1]))
-            # include [-1 -1 ... -1 0] as first
-            # full_X = tf.concat([full_X[-1:], full_X], 0)
+            # if isinstance(self.featurizer, FullDialogueTrackerFeaturizer):
+            #     full = tf.concat([X, slots, previous_actions, Y], -1)
+            # else:
+            full = Y
 
-            _, i, c = gen_array_ops.unique_with_counts_v2(full_X, axis=[0])
+            flat = tf.reshape(full, (-1, full.shape[-1]))
+            _, i, c = gen_array_ops.unique_with_counts_v2(flat, axis=[0])
             c = tf.cast(c, tf.float32)
 
-            counts = tf.reshape(tf.gather(c, i), (tf.shape(X)[0], tf.shape(X)[1]))
+            counts = tf.reshape(tf.gather(c, i), (tf.shape(Y)[0], tf.shape(Y)[1]))
 
             # do not include [-1 -1 ... -1 0] in averaging
             # and smooth it by taking sqrt
-            return tf.maximum(tf.sqrt(tf.reduce_mean(c) / counts), 1)
+
+            if isinstance(self.featurizer, FullDialogueTrackerFeaturizer):
+                # action_listen is the top one by an order
+                max_c = tf.math.top_k(c, 2)[0][1]
+            else:
+                max_c = tf.reduce_max(c)
+            # max_c = tf.math.top_k(c, 2)[0][1]
+            # max_c = tf.cond(tf.shape(c)[0] > 1, lambda: tf.math.top_k(c, 2)[0][1], lambda: tf.reduce_max(c))
+            # max_c = tf.reduce_max(c)
+
+            return tf.maximum(max_c / counts, 1)
+            # return tf.maximum(tf.square(max_c / counts), 1)
+
+            # exit()
+        #     full_X = tf.concat(
+        #         [X, slots, previous_actions, Y], -1
+        #     )
+        #     full_X = tf.reshape(full_X, (-1, full_X.shape[-1]))
+        #     # include [-1 -1 ... -1 0] as first
+        #     # full_X = tf.concat([full_X[-1:], full_X], 0)
+        #
+        #     _, i, c = gen_array_ops.unique_with_counts_v2(full_X, axis=[0])
+        #     c = tf.cast(c, tf.float32)
+        #
+        #     counts = tf.reshape(tf.gather(c, i), (tf.shape(X)[0], tf.shape(X)[1]))
+        #
+        #     # do not include [-1 -1 ... -1 0] in averaging
+        #     # and smooth it by taking sqrt
+        #     return tf.maximum(tf.sqrt(tf.reduce_mean(c) / counts), 1)
         else:
             return [[None]]
 
@@ -1238,6 +1321,7 @@ class EmbeddingPolicy(Policy):
         sims_rnn_to_max: List['tf.Tensor'],
         bad_negs,
         mask: 'tf.Tensor',
+        batch_bad_negs
     ) -> 'tf.Tensor':
         """Define loss."""
 
@@ -1255,7 +1339,7 @@ class EmbeddingPolicy(Policy):
             max_margin = tf.maximum(0., self.mu_neg + sim_neg)
             loss += tf.reduce_sum(max_margin, -1)
 
-        if self.scale_loss_by_action_counts:
+        if isinstance(self.featurizer, FullDialogueTrackerFeaturizer) and self.scale_loss_by_action_counts:
             # scale loss inverse proportionally to number of action counts
             loss *= self._loss_scales
 
@@ -1266,7 +1350,7 @@ class EmbeddingPolicy(Policy):
 
         # penalize max similarity between dial embeddings
         if sim_dial_emb is not None:
-            sim_dial_emb += common_attention.large_compatible_negative(bad_negs.dtype) * bad_negs
+            sim_dial_emb += common_attention.large_compatible_negative(batch_bad_negs.dtype) * batch_bad_negs
             max_sim_input_emb = tf.maximum(0., tf.reduce_max(sim_dial_emb, -1))
             loss += max_sim_input_emb * self.C_emb
 
@@ -1293,6 +1377,7 @@ class EmbeddingPolicy(Policy):
         sim: 'tf.Tensor',
         sim_bot_emb: 'tf.Tensor',
         sim_dial_emb: 'tf.Tensor',
+        sim_dial_bot_emb,
         sims_rnn_to_max: List['tf.Tensor'],
         bad_negs,
         mask: 'tf.Tensor',
@@ -1307,22 +1392,35 @@ class EmbeddingPolicy(Policy):
         if sim_dial_emb is not None:
             all_sim.append(sim_dial_emb + common_attention.large_compatible_negative(batch_bad_negs.dtype) * batch_bad_negs)
 
+        if sim_dial_bot_emb is not None:
+            all_sim.append(sim_dial_bot_emb + common_attention.large_compatible_negative(bad_negs.dtype) * bad_negs)
+
         logits = tf.concat(all_sim, -1)
         pos_labels = tf.ones_like(logits[:, :, :1])
         neg_labels = tf.zeros_like(logits[:, :, 1:])
         labels = tf.concat([pos_labels, neg_labels], -1)
 
-        if isinstance(self.featurizer, FullDialogueTrackerFeaturizer):
-            if self.scale_loss_by_action_counts:
-                scale_mask = self._loss_scales * mask
-            else:
-                scale_mask = mask
-        else:
-            scale_mask = 1.0
+        pred = tf.nn.softmax(logits)
+        # fake_logits = tf.concat([logits[:, :, :1] - common_attention.large_compatible_negative(logits.dtype),
+        #                          logits[:, :, 1:] + common_attention.large_compatible_negative(logits.dtype)], -1)
+
+        # ones = tf.ones_like(pred[:, :, 0])
+        # zeros = tf.zeros_like(pred[:, :, 0])
+
+        # already_learned = tf.where(pred[:, :, 0] > 0.8, zeros, ones)
+        already_learned = tf.pow((1 - pred[:, :, 0]) / 0.5, 4)
+
+        # if isinstance(self.featurizer, FullDialogueTrackerFeaturizer):
+        # if self.scale_loss_by_action_counts:
+        #     scale_mask = self._loss_scales * mask
+        # else:
+        scale_mask = mask
+        # else:
+        #     scale_mask = 1.0
 
         loss = tf.losses.softmax_cross_entropy(labels,
                                                logits,
-                                               scale_mask)
+                                               scale_mask * already_learned)
         # add regularization losses
         loss += self._regularization_loss() + tf.losses.get_regularization_loss()
 
@@ -1464,7 +1562,7 @@ class EmbeddingPolicy(Policy):
                 self.attention_weights = {}
                 tr_out, self_attention_bias, tr_in = self._create_transformer_encoder(self.a_in, self.c_in, self.b_prev_in, mask, self.attention_weights)
                 # self.dial_embed, self.attention_weights = self._action_to_copy(tr_in, tr_out, self_attention_bias, embed_prev_action, embed_for_action_listen, embed_for_no_action)
-                self.dial_embed = self._create_embed(tr_out, layer_name_suffix="out")
+                self.dial_embed = self._create_embed(tr_out, layer_name_suffix="out") #+ self._create_embed(self.c_in, layer_name_suffix="slots")
                 sims_rnn_to_max = []
             else:
                 # create embedding vectors
@@ -1541,15 +1639,15 @@ class EmbeddingPolicy(Policy):
                                                            self.bot_embed.shape[-1]))
 
             # self.sim_op, sim_bot_emb, sim_dial_emb = self._tf_sim(self.dial_embed, tiled_bot_embed, mask)
-            self.sim_op, sim_bot_emb, sim_dial_emb = self._tf_sim(tiled_dial_embed, tiled_bot_embed, mask)
+            self.sim_op, sim_bot_emb, sim_dial_emb, sim_dial_bot_emb = self._tf_sim(tiled_dial_embed, tiled_bot_embed, mask)
 
             # construct loss
-            if isinstance(self.featurizer, FullDialogueTrackerFeaturizer) and self.scale_loss_by_action_counts:
+            if self.scale_loss_by_action_counts:
                 self._loss_scales = self._scale_loss_by_count_actions(self.a_in, self.b_in, self.c_in, self.b_prev_in)
             else:
                 self._loss_scales = None
             # loss = self._tf_loss_2(self.sim_op, sim_bot_emb, sim_dial_emb, sims_rnn_to_max, bad_negs, mask)
-            loss = self._tf_loss_2(self.sim_op, sim_bot_emb, sim_dial_emb, sims_rnn_to_max, bad_negs, mask, batch_bad_negs)
+            loss = self._tf_loss_2(self.sim_op, sim_bot_emb, sim_dial_emb, sim_dial_bot_emb, sims_rnn_to_max, bad_negs, mask, batch_bad_negs)
 
             # define which optimizer to use
             self._train_op = tf.train.AdamOptimizer(
@@ -1633,11 +1731,12 @@ class EmbeddingPolicy(Policy):
             if isinstance(self.featurizer, MaxHistoryTrackerFeaturizer):
                 self.dial_embed = self.dial_embed[:, -1:, :]
 
-            self.sim_op, _, _ = self._tf_sim(self.dial_embed, self.bot_embed, mask)
+            self.sim_op, _, _, _ = self._tf_sim(self.dial_embed, self.bot_embed, mask)
 
-            self.attention_weights = tf.concat([tf.expand_dims(t, 0)
-                                                for name, t in self.attention_weights.items()
-                                                if name.endswith('multihead_attention/dot_product_attention')], 0)
+            # if self.attention_weights.items():
+            #     self.attention_weights = tf.concat([tf.expand_dims(t, 0)
+            #                                         for name, t in self.attention_weights.items()
+            #                                         if name.endswith('multihead_attention/dot_product_attention')], 0)
 
     # training helpers
     def _linearly_increasing_batch_size(self, epoch: int) -> int:
@@ -1663,7 +1762,7 @@ class EmbeddingPolicy(Policy):
                           batch_size_in,
                           loss: 'tf.Tensor',
                           mask,
-                          dialogue_len
+                          dialogue_len,
                           ) -> None:
         """Train tf graph"""
 
@@ -1844,7 +1943,7 @@ class EmbeddingPolicy(Policy):
             result[result < 0] = 0
         elif self.similarity_type == "inner":
             # normalize result to [0, 1] with softmax but only over 3*num_neg+1 values
-            low_ids = result.argsort()[::-1][3*self.num_neg+1:]
+            low_ids = result.argsort()[::-1][4*self.num_neg+1:]
             result[low_ids] += -np.inf
             result = np.exp(result)
             result /= np.sum(result)
