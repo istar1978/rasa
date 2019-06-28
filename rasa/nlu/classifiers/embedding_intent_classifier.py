@@ -1476,7 +1476,8 @@ class EmbeddingIntentClassifier(Component):
                 cached_component=cached_component,
                 model_file=model_file,
             )
-            # cls.use_tflite_model(model_file=model_file)
+            print ("NOW TESTING IF THE CONVERTED MODEL RUNS")
+            cls.use_tflite_model(model_file=model_file)
             # exit(0)
 
             # writer = tf.summary.FileWriter(logdir="tfgraph-simple", graph=obj.graph)
@@ -1923,14 +1924,14 @@ class EmbeddingIntentClassifier(Component):
             # node = [n for n in graph.get_operations() if n.name == node_name][0]
             # exit(0)
 
-            """
+            # """
             ###################################################################
             # quantisation
             # use tensorflow 1.14.0 and tensorflow-probability 0.7.0
             # problematic ops: Cumprod, Cumsum, ScatterNd -> solved
             # problematic ops: BatchMatMul, Cos, Sign
 
-            print("a_in_weird_shape.shape", a_in_weird_shape.shape)
+            print ("a_in_weird_shape.shape", a_in_weird_shape.shape)
             in_tensors = [a_in_weird_shape, all_intents_embed_in]
             # in_tensors = [a_in_weird_shape]
             out_tensors = [sim_all]
@@ -1944,9 +1945,9 @@ class EmbeddingIntentClassifier(Component):
             ]
             tflite_model = converter.convert()
             open(model_file, "wb").write(tflite_model)
-            print("SAVED MODEL!!!")
+            print ("SAVED MODEL!!!")
             ###################################################################
-            """
+            # """
             return cls(
                 component_config=meta,
                 inv_intent_dict=inv_intent_dict,
