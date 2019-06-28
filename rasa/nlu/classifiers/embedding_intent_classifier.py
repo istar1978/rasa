@@ -153,6 +153,7 @@ class EmbeddingIntentClassifier(Component):
         word_embed: Optional["tf.Tensor"] = None,
         intent_embed: Optional["tf.Tensor"] = None,
         weird_input_shape=False,
+        is_tflite=False,
     ) -> None:
         """Declare instant variables with default values"""
 
@@ -188,6 +189,7 @@ class EmbeddingIntentClassifier(Component):
         # [seq_length, batch_size, num_channels]. Needed when we convert to TFLite,
         # which requires only first input dimension to be of unknown length.
         self.weird_input_shape = weird_input_shape
+        self.is_tflite = is_tflite
 
     # init helpers
     def _load_nn_architecture_params(self, config: Dict[Text, Any]) -> None:
@@ -1199,6 +1201,8 @@ class EmbeddingIntentClassifier(Component):
 
         if self.weird_input_shape:
             X_T = np.transpose(X, axes=[1, 0, 2])
+            print ("X_T", X_T.shape)
+            print ("a_in", self.a_in.shape)
 
             message_sim = self.session.run(
                 self.sim_all,
@@ -1240,7 +1244,10 @@ class EmbeddingIntentClassifier(Component):
             if not self.sequence:
                 return np.array([x.toarray() for x in array_of_sparse]).squeeze()
             else:
-                seq_len = max([x.shape[0] for x in array_of_sparse])
+                if self.is_tflite:
+                    seq_len = self.max_seq_length
+                else:
+                    seq_len = max([x.shape[0] for x in array_of_sparse])
                 X = (
                     np.ones(
                         [len(array_of_sparse), seq_len, array_of_sparse[0].shape[-1]],
@@ -1249,7 +1256,7 @@ class EmbeddingIntentClassifier(Component):
                     * -1
                 )
                 for i, x in enumerate(array_of_sparse):
-                    X[i, : x.shape[0], :] = x.toarray()
+                    X[i, : x.shape[0], :] = x.toarray()  #!!
 
                 return X
         else:
@@ -1651,7 +1658,7 @@ class EmbeddingIntentClassifier(Component):
         mask_padded = tf.pad(mask, pad_post)
         mask_inv_padded = tf.pad(mask_inv, pad_pre)
         last = (1 - tf.abs(mask_padded - mask_inv_padded))[
-            :, 1:
+            0:, 1:
         ]  # [B, L] 1 in place of the last real token
 
         # TOCO: Check failed: start_indices_size <= num_input_axes (3 vs. 2)StridedSlice op requires no more than 2 start indices
@@ -1843,6 +1850,8 @@ class EmbeddingIntentClassifier(Component):
 
             ## prediction graph
             batch_size = 1
+            seq_len = 10
+
             all_intents_embed_in = tf.placeholder(
                 tf.float32, all_intents_embed_values.shape, name="all_intents_embed"
             )
@@ -1850,9 +1859,11 @@ class EmbeddingIntentClassifier(Component):
                 tf.float32, (None, batch_size, placeholder_dims["a_in"]), name="a_weird"
             )
             b_in_weird_shape = tf.placeholder(
-                tf.float32, (None, batch_size, placeholder_dims["b_in"]), name="b_weird"
+                tf.float32,
+                (meta["max_seq_length"], batch_size, placeholder_dims["b_in"]),
+                name="b_weird",
             )
-            print (a_in_weird_shape.shape, b_in_weird_shape.shape)
+            # print (a_in_weird_shape.shape, b_in_weird_shape.shape)
             # exit(0)
             a_in = tf.transpose(a_in_weird_shape, [1, 0, 2], name="a")  # [B, L, C]
             b_in = tf.transpose(b_in_weird_shape, [1, 0, 2], name="b")
@@ -1884,7 +1895,9 @@ class EmbeddingIntentClassifier(Component):
             all_b = intent_embed[tf.newaxis, :, :]
             tiled_intent_embed = tf.tile(all_b, [batch_size, 1, 1])
 
-            sim_op, _, _ = cls._tf_sim_static(word_embed, tiled_intent_embed, meta)
+            print ("Intents_in", all_intents_embed_in.shape)
+
+            # sim_op, _, _ = cls._tf_sim_static(word_embed, tiled_intent_embed, meta)
 
             sim_all, _, _ = cls._tf_sim_static(word_embed, all_intents_embed_in, meta)
 
@@ -1910,16 +1923,17 @@ class EmbeddingIntentClassifier(Component):
             # node = [n for n in graph.get_operations() if n.name == node_name][0]
             # exit(0)
 
-            # """
+            """
             ###################################################################
             # quantisation
             # use tensorflow 1.14.0 and tensorflow-probability 0.7.0
             # problematic ops: Cumprod, Cumsum, ScatterNd -> solved
             # problematic ops: BatchMatMul, Cos, Sign
 
-            in_tensors = [a_in_weird_shape, b_in_weird_shape]
+            print("a_in_weird_shape.shape", a_in_weird_shape.shape)
+            in_tensors = [a_in_weird_shape, all_intents_embed_in]
             # in_tensors = [a_in_weird_shape]
-            out_tensors = [sim_op, sim_all]
+            out_tensors = [sim_all]
             # out_tensors = [qk_4d_by_parts]
             converter = tf.lite.TFLiteConverter.from_session(
                 sess, in_tensors, out_tensors
@@ -1930,8 +1944,9 @@ class EmbeddingIntentClassifier(Component):
             ]
             tflite_model = converter.convert()
             open(model_file, "wb").write(tflite_model)
+            print("SAVED MODEL!!!")
             ###################################################################
-            # """
+            """
             return cls(
                 component_config=meta,
                 inv_intent_dict=inv_intent_dict,
@@ -1941,12 +1956,13 @@ class EmbeddingIntentClassifier(Component):
                 graph=graph,
                 message_placeholder=a_in_weird_shape,
                 intent_placeholder=b_in_weird_shape,
-                similarity_op=sim_op,
+                # similarity_op=sim_op,
                 all_intents_embed_in=all_intents_embed_in,
                 sim_all=sim_all,
                 word_embed=word_embed,
                 intent_embed=intent_embed,
                 weird_input_shape=True,
+                is_tflite=True,
             )
 
     @classmethod
