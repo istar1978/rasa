@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def run_cmdline(model_path, component_builder=None):
-    interpreter = Interpreter.load(model_path, component_builder)
+    interpreter = Interpreter.load(model_path, component_builder,kwargs={"include_test_intent": 0})
     regex_interpreter = RegexInterpreter()
 
     print_success("NLU model loaded. Type a message and press enter to parse it.")

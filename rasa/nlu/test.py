@@ -24,7 +24,7 @@ CVEvaluationResult = namedtuple("Results", "train test")
 
 IntentEvaluationResult = namedtuple(
     "IntentEvaluationResult",
-    "intent_target " "intent_prediction " "message " "confidence",
+    ["intent_target", "intent_prediction", "message", "confidence", "intent_rankings"]
 )
 
 EntityEvaluationResult = namedtuple(
@@ -111,17 +111,31 @@ def plot_histogram(
 
 
 def log_evaluation_table(
-    report: Text, precision: float, f1: float, accuracy: float
+    report: Text, precision: float, f1: float, accuracy: float, hit_ratio: float = None
 ) -> None:  # pragma: no cover
     """Log the sklearn evaluation metrics."""
 
     logger.info("F1-Score:  {}".format(f1))
     logger.info("Precision: {}".format(precision))
     logger.info("Accuracy:  {}".format(accuracy))
-    logger.info("Classification report: \n{}".format(report))
+    if hit_ratio is not None:
+        logger.info("Hit Ratio: {}".format(hit_ratio))
+    # logger.info("Classification report: \n{}".format(report))
+
+def compute_hit_ratio(targets, prediction_rankings):
+
+    num_samples = len(targets)
+    num_hits = 0
+    prediction_ranked_intents = [[candidate['name'] for candidate in target_predictions] for target_predictions in prediction_rankings]
+    for idx, target in enumerate(targets):
+        target_predictions = prediction_ranked_intents[idx]
+        # print(idx, target,target_predictions)
+        if target in target_predictions:
+            num_hits += 1
+    return num_hits / float(num_samples)
 
 
-def get_evaluation_metrics(targets, predictions, output_dict=False):
+def get_evaluation_metrics(targets, predictions, prediction_rankings=None, output_dict=False):
     """Compute the f1, precision, accuracy and summary report from sklearn."""
     from sklearn import metrics
 
@@ -134,8 +148,11 @@ def get_evaluation_metrics(targets, predictions, output_dict=False):
     precision = metrics.precision_score(targets, predictions, average="weighted")
     f1 = metrics.f1_score(targets, predictions, average="weighted")
     accuracy = metrics.accuracy_score(targets, predictions)
-
-    return report, precision, f1, accuracy
+    if prediction_rankings:
+        hit_ratio = compute_hit_ratio(targets,prediction_rankings)
+        return report, precision, f1, accuracy, hit_ratio
+    else:
+        return report, precision, f1, accuracy
 
 
 def remove_empty_intent_examples(intent_results):
@@ -271,11 +288,11 @@ def evaluate_intents(
         "of {} examples".format(len(intent_results), num_examples)
     )
 
-    targets, predictions = _targets_predictions_from(intent_results)
+    targets, predictions, prediction_rankings = _targets_predictions_from(intent_results)
 
     if report_folder:
-        report, precision, f1, accuracy = get_evaluation_metrics(
-            targets, predictions, output_dict=True
+        report, precision, f1, accuracy, hit_ratio = get_evaluation_metrics(
+            targets, predictions, prediction_rankings, output_dict=True
         )
 
         report_filename = os.path.join(report_folder, "intent_report.json")
@@ -284,8 +301,8 @@ def evaluate_intents(
         logger.info("Classification report saved to {}.".format(report_filename))
 
     else:
-        report, precision, f1, accuracy = get_evaluation_metrics(targets, predictions)
-        log_evaluation_table(report, precision, f1, accuracy)
+        report, precision, f1, accuracy, hit_ratio = get_evaluation_metrics(targets, predictions, prediction_rankings)
+        log_evaluation_table(report, precision, f1, accuracy, hit_ratio)
 
     if successes_filename:
         # save classified samples to file for debugging
@@ -298,21 +315,25 @@ def evaluate_intents(
     if confmat_filename:
         from sklearn.metrics import confusion_matrix
         from sklearn.utils.multiclass import unique_labels
+        import matplotlib
+        matplotlib.use('PS')
         import matplotlib.pyplot as plt
+
 
         cnf_matrix = confusion_matrix(targets, predictions)
         labels = unique_labels(targets, predictions)
-        plot_confusion_matrix(
-            cnf_matrix,
-            classes=labels,
-            title="Intent Confusion matrix",
-            out=confmat_filename,
-        )
-        plt.show()
 
-        plot_intent_confidences(intent_results, intent_hist_filename)
-
-        plt.show()
+        # plot_confusion_matrix(
+        #     cnf_matrix,
+        #     classes=labels,
+        #     title="Intent Confusion matrix",
+        #     out=confmat_filename,
+        # )
+        # plt.show()
+        #
+        # plot_intent_confidences(intent_results, intent_hist_filename)
+        #
+        # plt.show()
 
     predictions = [
         {
@@ -330,6 +351,7 @@ def evaluate_intents(
         "precision": precision,
         "f1_score": f1,
         "accuracy": accuracy,
+        "hit_ratio": hit_ratio
     }
 
 
@@ -566,16 +588,19 @@ def get_eval_data(interpreter, test_data):  # pragma: no cover
     should_eval_entities = is_entity_extractor_present(interpreter)
 
     for example in tqdm(test_data.training_examples):
-        result = interpreter.parse(example.text, only_output_properties=False)
+        result = interpreter.parse(example.text, only_output_properties=False,text_intent=example.get('intent'))
 
         if should_eval_intents:
             intent_prediction = result.get("intent", {}) or {}
+            intent_rankings = result.get("intent_ranking", {}) or {}
+            # print(intent_rankings)
             intent_results.append(
                 IntentEvaluationResult(
                     example.get("intent", ""),
                     intent_prediction.get("name"),
                     result.get("text", {}),
                     intent_prediction.get("confidence"),
+                    intent_rankings,
                 )
             )
 
@@ -632,6 +657,7 @@ def run_evaluation(
     confmat: Optional[Text] = None,
     histogram: Optional[Text] = None,
     component_builder: Optional[ComponentBuilder] = None,
+    kwargs: Optional[Dict] = None
 ) -> Dict:  # pragma: no cover
     """
     Evaluate intent classification and entity extraction.
@@ -648,11 +674,20 @@ def run_evaluation(
     :return: dictionary containing evaluation results
     """
 
-    # get the metadata config from the package data
-    interpreter = Interpreter.load(model_path, component_builder)
+    # TODO: Fix this. Training Data should be loaded with language stored in model metadata which the interpreter gives, but interpreter needs test data if test intents have to be loaded. Sort of a chicken and egg problem.
+    test_data = training_data.load_data(data_path)
 
+    # Add test data object to kwargs to include test intents
+    if kwargs["include_test_intent"]:
+        kwargs['test_data']=test_data
+
+    print(kwargs)
+
+    # get the metadata config from the package data
+    interpreter = Interpreter.load(model_path, component_builder,kwargs=kwargs)
     interpreter.pipeline = remove_pretrained_extractors(interpreter.pipeline)
-    test_data = training_data.load_data(data_path, interpreter.model_metadata.language)
+
+    # test_data = training_data.load_data(data_path, interpreter.model_metadata.language)
 
     result = {"intent_evaluation": None, "entity_evaluation": None}
 
@@ -769,7 +804,7 @@ def cross_validate(
 
 
 def _targets_predictions_from(intent_results):
-    return zip(*[(r.intent_target, r.intent_prediction) for r in intent_results])
+    return zip(*[(r.intent_target, r.intent_prediction, r.intent_rankings) for r in intent_results])
 
 
 def compute_metrics(interpreter, corpus):

@@ -6,6 +6,8 @@ from rasa.nlu.config import RasaNLUModelConfig
 from rasa.nlu.tokenizers import Token, Tokenizer
 from rasa.nlu.training_data import Message, TrainingData
 
+import logging
+logger = logging.getLogger(__name__)
 
 class WhitespaceTokenizer(Tokenizer, Component):
 
@@ -20,6 +22,7 @@ class WhitespaceTokenizer(Tokenizer, Component):
         super(WhitespaceTokenizer, self).__init__(component_config)
         self.intent_split_symbol = self.component_config['intent_split_symbol']
         self.add_class_label = self.component_config['add_class_label']
+        self.is_test_data_featurized = False
 
     def train(self, training_data: TrainingData, config: RasaNLUModelConfig,
               **kwargs: Any) -> None:
@@ -33,7 +36,26 @@ class WhitespaceTokenizer(Tokenizer, Component):
 
     def process(self, message: Message, **kwargs: Any) -> None:
 
+        featurized_test_data = None
+
+        if "test_data" in kwargs and not self.is_test_data_featurized:
+
+            logger.info("Adding intent tokens to test set for the first time")
+
+            test_data = kwargs["test_data"]
+
+            for example in test_data.training_examples:
+                if example.get("intent"):
+                    example.set("intent_tokens",
+                                self.tokenize(example.get("intent"),
+                                              self.intent_split_symbol))
+
+            self.is_test_data_featurized = True
+            featurized_test_data = test_data
+
         message.set("tokens", self.tokenize(message.text))
+
+        return featurized_test_data
 
     def tokenize(self, text: Text, split=' ') -> List[Token]:
 

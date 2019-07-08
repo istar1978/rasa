@@ -8,7 +8,7 @@ import logging
 import typing
 from typing import Any, Dict, List, Optional, Text, Type
 
-from rasa.nlu import utils
+from rasa.nlu.rankers.embedding_response_selector import ResponseSelector
 from rasa.nlu.classifiers.embedding_intent_classifier import EmbeddingIntentClassifier
 from rasa.nlu.classifiers.keyword_intent_classifier import KeywordIntentClassifier
 from rasa.nlu.classifiers.mitie_intent_classifier import MitieIntentClassifier
@@ -30,6 +30,7 @@ from rasa.nlu.tokenizers.spacy_tokenizer import SpacyTokenizer
 from rasa.nlu.tokenizers.whitespace_tokenizer import WhitespaceTokenizer
 from rasa.nlu.utils.mitie_utils import MitieNLP
 from rasa.nlu.utils.spacy_utils import SpacyNLP
+from rasa.nlu.utils import class_from_module_path
 
 if typing.TYPE_CHECKING:
     from rasa.nlu.components import Component
@@ -66,6 +67,7 @@ component_classes = [
     MitieIntentClassifier,
     KeywordIntentClassifier,
     EmbeddingIntentClassifier,
+    ResponseSelector,
 ]
 
 # Mapping from a components name to its class to allow name based lookup.
@@ -138,7 +140,7 @@ def get_component_class(component_name: Text) -> Type["Component"]:
     if component_name not in registered_components:
         if component_name not in old_style_names:
             try:
-                return utils.class_from_module_path(component_name)
+                return class_from_module_path(component_name)
             except Exception:
                 raise Exception(
                     "Failed to find component class for '{}'. Unknown "

@@ -22,7 +22,7 @@ class TrainingData(object):
     """Holds loaded intent and entity training data."""
 
     # Validation will ensure and warn if these lower limits are not met
-    MIN_EXAMPLES_PER_INTENT = 2
+    MIN_EXAMPLES_PER_INTENT = 1
     MIN_EXAMPLES_PER_ENTITY = 2
 
     def __init__(
@@ -233,7 +233,7 @@ class TrainingData(object):
             + "\t- intent examples: {} ({} distinct intents)\n".format(
                 len(self.intent_examples), len(self.intents)
             )
-            + "\t- Found intents: {}\n".format(list_to_str(self.intents))
+            # + "\t- Found intents: {}\n".format(list_to_str(self.intents))
             + "\t- entity examples: {} ({} distinct entities)\n".format(
                 len(self.entity_examples), len(self.entities)
             )

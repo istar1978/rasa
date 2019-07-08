@@ -280,6 +280,7 @@ class Interpreter(object):
         model_dir: Text,
         component_builder: Optional[ComponentBuilder] = None,
         skip_validation: bool = False,
+        kwargs: Optional[Dict] = None,
     ) -> "Interpreter":
         """Create an interpreter based on a persisted model.
 
@@ -298,17 +299,22 @@ class Interpreter(object):
         model_metadata = Metadata.load(model_dir)
 
         Interpreter.ensure_model_compatibility(model_metadata)
-        return Interpreter.create(model_metadata, component_builder, skip_validation)
+        return Interpreter.create(model_metadata, component_builder, skip_validation,kwargs=kwargs)
 
     @staticmethod
     def create(
         model_metadata: Metadata,
         component_builder: Optional[ComponentBuilder] = None,
         skip_validation: bool = False,
+        kwargs: Optional[Dict] = None
     ) -> "Interpreter":
         """Load stored model and components defined by the provided metadata."""
 
         context = {}
+
+        # Add test data to context so that components can pick up if needed
+        if "include_test_intent" in kwargs and kwargs["include_test_intent"]:
+            context["test_data"] = kwargs["test_data"]
 
         if component_builder is None:
             # If no builder is passed, every interpreter creation will result
@@ -356,6 +362,7 @@ class Interpreter(object):
         text: Text,
         time: Optional[datetime.datetime] = None,
         only_output_properties: bool = True,
+        text_intent: Text = None,
     ) -> Dict[Text, Any]:
         """Parse the input text, classify it and return pipeline result.
 
@@ -371,9 +378,15 @@ class Interpreter(object):
             return output
 
         message = Message(text, self.default_output_attributes(), time=time)
+        if text_intent is not None:
+            message.set("intent_target", text_intent)
 
+        # print([e.get("intent") for e in self.context["test_data"].intent_examples])
         for component in self.pipeline:
-            component.process(message, **self.context)
+            test_data = component.process(message, **self.context)
+            if "test_data" in self.context and test_data is not None:
+                logger.info('updating test data')
+                self.context["test_data"] = test_data
 
         output = self.default_output_attributes()
         output.update(message.as_dict(only_output_properties=only_output_properties))
