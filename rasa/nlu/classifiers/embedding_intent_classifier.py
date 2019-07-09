@@ -6,6 +6,8 @@ import typing
 from tqdm import tqdm
 from typing import Any, Dict, List, Optional, Text, Tuple
 
+import time
+
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
 from scipy.sparse import issparse, csr_matrix
@@ -373,6 +375,7 @@ class EmbeddingIntentClassifier(Component):
         name: Text,
     ) -> "tf.Tensor":
         """Create nn with hidden layers and name"""
+        print("creating NN BOW model")
 
         reg = tf.contrib.layers.l2_regularizer(self.C2)
         x = x_in
@@ -385,7 +388,7 @@ class EmbeddingIntentClassifier(Component):
                 name="hidden_layer_{}_{}".format(name, i),
                 reuse=tf.AUTO_REUSE,
             )
-            x = tf.layers.dropout(x, rate=self.droprate, training=is_training)
+            # x = tf.layers.dropout(x, rate=self.droprate, training=is_training)
 
         return x
 
@@ -1202,12 +1205,12 @@ class EmbeddingIntentClassifier(Component):
         self, X: np.ndarray
     ) -> Tuple[np.ndarray, List[float]]:
         """Load tf graph and calculate message similarities"""
-
+        start = time.time()
         X_ready = X if not self.weird_input_shape else np.transpose(X, axes=[1, 0, 2])
 
         if self.is_tflite:
             self.interpreter.set_tensor(self.a_in_index, X_ready.astype(dtype=np.float32))
-            self.interpreter.invoke()
+            self.interpreter.invoke() # this boy takes around 40ms (only around 2ms for uncompressed model)
             message_sim = self.interpreter.get_tensor(self.sim_all_index)
         else:
             message_sim = self.session.run(
@@ -1217,7 +1220,7 @@ class EmbeddingIntentClassifier(Component):
                     self.all_intents_embed_in: self.all_intents_embed_values,
                 }
             )
-
+        print("Time: {:.5f}".format(time.time() - start))
         message_sim = message_sim.flatten()  # sim is a matrix
 
         intent_ids = message_sim.argsort()[::-1]
@@ -1464,8 +1467,8 @@ class EmbeddingIntentClassifier(Component):
         **kwargs: Any
     ) -> "EmbeddingIntentClassifier":
         if model_dir and meta.get("file"):
-            if meta["use_tflite"] and False:
-                tflite_model_file = "tflite/converted_model.tflite"
+            tflite_model_file = "tflite/converted_model.tflite"
+            if meta["use_tflite"]:
                 obj = cls.create_simpler_graph(
                     meta=meta,
                     model_dir=model_dir,
@@ -1488,8 +1491,23 @@ class EmbeddingIntentClassifier(Component):
                 file_name = meta.get("file")
                 checkpoint = os.path.join(model_dir, file_name + ".ckpt")
 
+                with io.open(
+                    os.path.join(model_dir, file_name + "_inv_intent_dict.pkl"), "rb"
+                ) as f:
+                    inv_intent_dict = pickle.load(f)
+                with io.open(
+                    os.path.join(model_dir, file_name + "_encoded_all_intents.pkl"), "rb"
+                ) as f:
+                    encoded_all_intents = pickle.load(f)
+                with io.open(
+                    os.path.join(model_dir, file_name + "_all_intents_embed_values.pkl"),
+                    "rb",
+                ) as f:
+                    all_intents_embed_values = pickle.load(f)
+
                 graph = tf.Graph()
                 with graph.as_default():
+                    print("loading...")                    
                     sess = tf.Session()
                     if meta["gpu_lstm"]:
                         # rebuild tf graph for prediction
@@ -1550,39 +1568,89 @@ class EmbeddingIntentClassifier(Component):
                         saver = tf.train.Saver()
 
                     else:
+                        print("not a gou lstm")
                         saver = tf.train.import_meta_graph(checkpoint + ".meta")
+                        # Speed on Sara test data (using extremely deep BOW model):
+                        # 5s (~170it/s) using full model (6.605s invoking time)
+                        # 5s (~185it/s) using converted model without any optimisation (6.308s invoking time)
+                        convert = True
+                        if convert:
+                            print("converting")
+                            a_in = tf.get_collection("message_placeholder")[0]
+                            b_in = tf.get_collection("intent_placeholder")[0]
 
-                        # iterator = tf.get_collection('data_iterator')[0]
+                            sim_op = tf.get_collection("similarity_op")[0]
 
-                        a_in = tf.get_collection("message_placeholder")[0]
-                        b_in = tf.get_collection("intent_placeholder")[0]
+                            all_intents_embed_in = tf.get_collection("all_intents_embed_in")[0]
+                            sim_all = tf.get_collection("sim_all")[0]
 
-                        sim_op = tf.get_collection("similarity_op")[0]
+                            word_embed = tf.get_collection("word_embed")[0]
+                            intent_embed = tf.get_collection("intent_embed")[0]
 
-                        all_intents_embed_in = tf.get_collection("all_intents_embed_in")[0]
-                        sim_all = tf.get_collection("sim_all")[0]
+                            
+                            num_intents = len([i for i in inv_intent_dict.items()])
+                            all_intents_embed_in.set_shape((1, num_intents, all_intents_embed_in.shape[-1]))
+                            a_in.set_shape((1, a_in.shape[-1]))
 
-                        word_embed = tf.get_collection("word_embed")[0]
-                        intent_embed = tf.get_collection("intent_embed")[0]
+                            saver.restore(sess, checkpoint)
 
-                    saver.restore(sess, checkpoint)
+                            in_tensors = [a_in, all_intents_embed_in]
+                            out_tensors = [sim_all]
+                            converter = tf.lite.TFLiteConverter.from_session(
+                                sess, in_tensors, out_tensors
+                            )
 
-                with io.open(
-                    os.path.join(model_dir, file_name + "_inv_intent_dict.pkl"), "rb"
-                ) as f:
-                    inv_intent_dict = pickle.load(f)
-                with io.open(
-                    os.path.join(model_dir, file_name + "_encoded_all_intents.pkl"), "rb"
-                ) as f:
-                    encoded_all_intents = pickle.load(f)
-                with io.open(
-                    os.path.join(model_dir, file_name + "_all_intents_embed_values.pkl"),
-                    "rb",
-                ) as f:
-                    all_intents_embed_values = pickle.load(f)
+                            converter.optimizations = [
+                                # tf.lite.Optimize.DEFAULT # 4s (~219it/s) (4.604s invoking time)
+                                # tf.lite.Optimize.OPTIMIZE_FOR_SIZE # 4s (~220it/s) (4.707s invoking time)
+                                # tf.lite.Optimize.OPTIMIZE_FOR_LATENCY # 4s (~215it/s) (4.630s invoking time)
+                            ]
+                            tflite_model = converter.convert()
+                            open(tflite_model_file, "wb").write(tflite_model)
+
+                            obj = cls(
+                                component_config=meta,
+                                inv_intent_dict=inv_intent_dict,
+                                encoded_all_intents=encoded_all_intents,
+                                all_intents_embed_values=all_intents_embed_values,
+                                session=sess,
+                                graph=graph,
+                                message_placeholder=a_in,
+                                intent_placeholder=None,
+                                all_intents_embed_in=all_intents_embed_in,
+                                sim_all=sim_all,
+                                word_embed=None,
+                                intent_embed=None,
+                                is_tflite=True,
+                                tflite_path=tflite_model_file
+                            )
+
+                            obj.interpreter = tf.lite.Interpreter(model_path=tflite_model_file)
+                            obj.interpreter.allocate_tensors()
+
+                            obj.a_in_index = obj.interpreter.get_input_details()[0]["index"]
+                            obj.interpreter.set_tensor(obj.interpreter.get_input_details()[1]["index"], 
+                                                       obj.all_intents_embed_values)
+
+                            obj.sim_all_index = obj.interpreter.get_output_details()[0]["index"]
+
+                            return obj
+                        else:
+                            print("doing the vanilla loading")
+                            a_in = tf.get_collection("message_placeholder")[0]
+                            b_in = tf.get_collection("intent_placeholder")[0]
+
+                            sim_op = tf.get_collection("similarity_op")[0]
+
+                            all_intents_embed_in = tf.get_collection("all_intents_embed_in")[0]
+                            sim_all = tf.get_collection("sim_all")[0]
+
+                            word_embed = tf.get_collection("word_embed")[0]
+                            intent_embed = tf.get_collection("intent_embed")[0]
+                            saver.restore(sess, checkpoint)
 
                 ###################################################################
-                # quantisation
+                # fake quantisation
                 ###################################################################
                 quantise = False
                 if quantise:
@@ -1609,6 +1677,8 @@ class EmbeddingIntentClassifier(Component):
                     quantise_vars(vars_embed_out, 256, graph, sess)
                     quantise_vars(vars_transformer, 2, graph, sess)
                 ###################################################################
+
+
 
                 return cls(
                     component_config=meta,
@@ -1910,21 +1980,21 @@ class EmbeddingIntentClassifier(Component):
             # problematic ops: Cumprod, Cumsum, ScatterNd -> solved
             # problematic ops: BatchMatMul, Cos, Sign
 
-            print ("a_in_weird_shape.shape", a_in_weird_shape.shape)
             in_tensors = [a_in_weird_shape, all_intents_embed_in]
-            # in_tensors = [a_in_weird_shape]
             out_tensors = [sim_all]
-            # out_tensors = [qk_4d_by_parts]
             converter = tf.lite.TFLiteConverter.from_session(
                 sess, in_tensors, out_tensors
             )
-            converter.target_ops = [
-                tf.lite.OpsSet.TFLITE_BUILTINS,
-                # tf.lite.OpsSet.SELECT_TF_OPS,
+
+            # takes ~110s when any of these are enabled (otherwise, takes ~35s)
+            converter.optimizations = [
+                # tf.lite.Optimize.DEFAULT
+                # tf.lite.Optimize.OPTIMIZE_FOR_SIZE
+                # tf.lite.Optimize.OPTIMIZE_FOR_LATENCY
             ]
+
             tflite_model = converter.convert()
             open(model_file, "wb").write(tflite_model)
-            print ("SAVED MODEL!!!")
             ###################################################################
             # """
             
