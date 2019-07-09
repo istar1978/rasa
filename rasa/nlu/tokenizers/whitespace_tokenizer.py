@@ -20,7 +20,7 @@ class WhitespaceTokenizer(Tokenizer, Component):
 
     def __init__(self, component_config=None):
         super(WhitespaceTokenizer, self).__init__(component_config)
-        self.intent_split_symbol = self.component_config['intent_split_symbol']
+        self.section_split_symbol = self.component_config['intent_split_symbol']
         self.add_class_label = self.component_config['add_class_label']
         self.is_test_data_featurized = False
 
@@ -32,7 +32,12 @@ class WhitespaceTokenizer(Tokenizer, Component):
             if example.get("intent"):
                 example.set("intent_tokens",
                             self.tokenize(example.get("intent"),
-                                          self.intent_split_symbol))
+                                          self.section_split_symbol))
+
+            if example.get("response"):
+                example.set("response_tokens",
+                            self.tokenize(example.get("response"),
+                                          self.section_split_symbol))
 
     def process(self, message: Message, **kwargs: Any) -> None:
 
@@ -48,7 +53,12 @@ class WhitespaceTokenizer(Tokenizer, Component):
                 if example.get("intent"):
                     example.set("intent_tokens",
                                 self.tokenize(example.get("intent"),
-                                              self.intent_split_symbol))
+                                              self.section_split_symbol))
+
+                if example.get("response"):
+                    example.set("response_tokens",
+                                self.tokenize(example.get("response"),
+                                              self.section_split_symbol))
 
             self.is_test_data_featurized = True
             featurized_test_data = test_data

@@ -202,6 +202,12 @@ class CountVectorsFeaturizer(Featurizer):
         return ' '.join([t.text for t in message.get("intent_tokens")])
 
     @staticmethod
+    def _get_message_response(message):
+        if message.get("response_tokens") is None:
+            return ' '
+        return ' '.join([t.text for t in message.get("response_tokens")])
+
+    @staticmethod
     def _get_text_sequence(text):
         return text.split()
 
@@ -305,36 +311,46 @@ class CountVectorsFeaturizer(Featurizer):
         lem_ints = [self._get_message_intent(example)
                     for example in training_data.intent_examples]
 
+        lem_resps = [self._get_message_response(example)
+                     for example in training_data.intent_examples]
+
         self._check_OOV_present(lem_ints)
+        self._check_OOV_present(lem_resps)
 
         # noinspection PyPep8Naming
         try:
             if not self.sequence:
                 if self.use_shared_vocab:
-                    self.vect.fit(lem_exs + lem_ints)
+                    self.vect.fit(lem_exs + lem_ints + lem_resps)
                     X = self.vect.transform(lem_exs)
-                    Y = self.vect.transform(lem_ints)
+                    Y_ints = self.vect.transform(lem_ints)
+                    Y_resps = self.vect.transform(lem_resps)
                 else:
                     X = self.vect[0].fit_transform(lem_exs)
-                    Y = self.vect[1].fit_transform(lem_ints)
+                    Y_ints = self.vect[1].fit_transform(lem_ints)
+                    Y_resps = self.vect[1].fit_transform(lem_resps)
 
                 if not self.sparse:
                     X = X.toarray()
-                    Y = Y.toarray()
+                    Y_ints = Y_ints.toarray()
+                    Y_resps = Y_resps.toarray()
                 else:
                     X.sort_indices()
-                    Y.sort_indices()
+                    Y_ints.sort_indices()
+                    Y_resps.sort_indices()
 
             else:
                 if self.use_shared_vocab:
                     self.vect.fit(lem_exs + lem_ints)
                     X = self._create_sequence(self.vect, lem_exs)
-                    Y = self._create_sequence(self.vect, lem_ints)
+                    Y_ints = self._create_sequence(self.vect, lem_ints)
+                    Y_resps = self._create_sequence(self.vect, lem_resps)
                 else:
                     self.vect[0].fit(lem_exs)
                     X = self._create_sequence(self.vect[0], lem_exs)
-                    self.vect[1].fit(lem_ints)
-                    Y = self._create_sequence(self.vect[1], lem_ints)
+                    self.vect[1].fit(lem_ints + lem_resps)
+                    Y_ints = self._create_sequence(self.vect[1], lem_ints)
+                    Y_resps = self._create_sequence(self.vect[1], lem_resps)
 
         except ValueError:
             self.vect = None
@@ -351,7 +367,8 @@ class CountVectorsFeaturizer(Featurizer):
             else:
                 example.set("text_features", X[i])
 
-            example.set("intent_features", Y[i])
+            example.set("intent_features", Y_ints[i])
+            example.set("response_features", Y_resps[i])
 
     def process(self, message: Message, **kwargs: Any) -> None:
         if self.vect is None:
@@ -373,7 +390,11 @@ class CountVectorsFeaturizer(Featurizer):
                 lem_ints = [self._get_message_intent(example)
                                 for example in test_data.intent_examples]
 
-                self._check_OOV_present(lem_ints)
+                lem_resps = [self._get_message_response(example) for example in test_data.intent_examples]
+
+                lem_comb = lem_ints + lem_resps
+
+                self._check_OOV_present(lem_comb)
 
                 if self.use_shared_vocab:
                     vect = self.vect
@@ -381,14 +402,18 @@ class CountVectorsFeaturizer(Featurizer):
                     vect = self.vect[1]
 
                 if not self.sequence:
-                    Y = vect.transform(lem_ints)
+                    Y_ints = vect.transform(lem_ints)
+                    Y_resps = vect.transform(lem_resps)
                     if not self.sparse:
-                        Y = Y.toarray()
+                        Y_ints = Y_ints.toarray()
+                        Y_resps = Y_resps.toarray()
                 else:
-                    Y = self._create_sequence(vect, lem_ints)
+                    Y_ints = self._create_sequence(vect, lem_ints)
+                    Y_resps = self._create_sequence(vect, lem_resps)
 
                 for i, example in enumerate(test_data.intent_examples):
-                    example.set("intent_features", Y[i])
+                    example.set("intent_features", Y_ints[i])
+                    example.set("response_features", Y_resps[i])
 
                 featurized_test_data = test_data
 

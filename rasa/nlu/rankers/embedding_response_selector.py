@@ -63,6 +63,8 @@ class ResponseSelector(EmbeddingIntentClassifier):
         # the number of hidden layers is thus equal to the length of this list
         "hidden_layers_sizes_b": [],
 
+        "response_type": "chitchat",
+
         "share_embedding": False,
         "bidirectional": False,
         "fused_lstm": False,
@@ -176,32 +178,31 @@ class ResponseSelector(EmbeddingIntentClassifier):
             X = message.get("text_features")
             X = self._toarray(X)
 
-            # Add test intents to existing intents
+            # Add test responses to existing responses
             if "test_data" in kwargs:
 
-                response_target = message.get("intent_target")
+                response_target = message.get("response_target")
                 test_data = kwargs["test_data"]
 
                 if not self.is_test_data_featurized:
 
-                    logger.info("Embedding test intents and adding to intent list for the first time")
+                    logger.info("Embedding test responses and adding to response list for the first time")
 
-                    new_test_intents = list(set([example.get("intent")
+                    new_test_intents = list(set([example.get("response")
                                                  for example in test_data.intent_examples
-                                                 if example.get("intent") not in self.inv_intent_dict.keys()]))
+                                                 if example.get("response") not in self.inv_intent_dict.keys()]))
 
                     self.test_intent_dict = {intent: idx + len(self.inv_intent_dict)
                                              for idx, intent in enumerate(sorted(new_test_intents))}
 
                     self.test_inv_intent_dict = {v: k for k, v in self.test_intent_dict.items()}
 
-                    encoded_new_intents = self._create_encoded_intents(self.test_intent_dict, test_data)
-
-                    # self.inv_intent_dict.update(self.test_inv_intent_dict)
+                    encoded_new_intents = self._create_encoded_labels(self.test_intent_dict, test_data)
 
                     # Reindex the intents from 0
                     self.test_inv_intent_dict = {i: val for i, (key, val) in
                                                  enumerate(self.test_inv_intent_dict.items())}
+
                     self.inv_intent_dict = self.test_inv_intent_dict
 
                     self.test_intent_dict = {v: k for k, v in self.inv_intent_dict.items()}
@@ -213,7 +214,6 @@ class ResponseSelector(EmbeddingIntentClassifier):
 
                     self.is_test_data_featurized = True
                     intent_target_id = self.test_intent_dict[response_target]
-
                 else:
                     intent_target_id = self.test_intent_dict[response_target]
 
@@ -236,6 +236,58 @@ class ResponseSelector(EmbeddingIntentClassifier):
 
         message.set("response", response, add_to_output=True)
         message.set("response_ranking", response_ranking, add_to_output=True)
+
+
+    def train(self,
+              training_data: 'TrainingData',
+              cfg: Optional['RasaNLUModelConfig'] = None,
+              **kwargs: Any) -> None:
+        """Train the embedding intent classifier on a data set."""
+
+        tb_sum_dir = '/tmp/tb_logs/response_selector'
+
+        intent_dict = self._create_label_dict(training_data,label_type='response')
+
+        if len(intent_dict) < 2:
+            logger.error("Can not train a response selector. "
+                         "Need at least 2 different classes. "
+                         "Skipping training of response selector.")
+            return
+
+        self.inv_intent_dict = {v: k for k, v in intent_dict.items()}
+        self.encoded_all_intents = self._create_encoded_labels(
+            intent_dict, training_data, label_type="response", label_feats="response_features")
+
+        X, Y, intents_for_X = self._prepare_data_for_training(
+            training_data, intent_dict, label_type='response', non_intents=True)
+
+        if self.share_embedding:
+            if X[0].shape[-1] != Y[0].shape[-1]:
+                raise ValueError("If embeddings are shared "
+                                 "text features and intent features "
+                                 "must coincide")
+
+        # check if number of negatives is less than number of intents
+        logger.debug("Check if num_neg {} is smaller than "
+                     "number of response {}, "
+                     "else set num_neg to the number of responses - 1"
+                     "".format(self.num_neg,
+                               self.encoded_all_intents.shape[0]))
+        self.num_neg = min(self.num_neg,
+                           self.encoded_all_intents.shape[0] - 1)
+
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            # set random seed
+            batch_size_in, is_training, iterator, loss, train_init_op, train_op, val_init_op = self.build_train_graph(X,
+                                                                                                                      Y)
+            self.session = tf.Session()
+
+            self._train_tf_dataset(train_init_op, val_init_op, batch_size_in, loss, is_training, train_op, tb_sum_dir)
+
+            self.all_intents_embed_values = self._create_all_intents_embed(self.encoded_all_intents, iterator)
+
+            self.build_pred_graph(is_training)
 
 
     def persist(self,

@@ -164,7 +164,7 @@ def _is_nlu_file(file_path: Text) -> bool:
 
 
 def _contains_nlu_pattern(text: Text) -> bool:
-    nlu_pattern = r"\s*##\s*(intent|regex||synonym|lookup):"
+    nlu_pattern = r"\s*##\s*(intent|regex||synonym|lookup|response):"
 
     return re.match(nlu_pattern, text) is not None
 

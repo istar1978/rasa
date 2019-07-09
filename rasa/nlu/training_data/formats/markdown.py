@@ -12,11 +12,12 @@ from rasa.nlu.utils import build_entity
 if typing.TYPE_CHECKING:
     from rasa.nlu.training_data import Message, TrainingData
 
+RESPONSE = "response"
 INTENT = "intent"
 SYNONYM = "synonym"
 REGEX = "regex"
 LOOKUP = "lookup"
-available_sections = [INTENT, SYNONYM, REGEX, LOOKUP]
+available_sections = [RESPONSE, INTENT, SYNONYM, REGEX, LOOKUP]
 
 # regex for: `[entity_text](entity_type(:entity_synonym)?)`
 ent_regex = re.compile(
@@ -101,7 +102,7 @@ class MarkdownReader(TrainingDataReader):
         match = re.match(item_regex, line)
         if match:
             item = match.group(1)
-            if self.current_section == INTENT:
+            if self.current_section == INTENT or self.current_section == RESPONSE:
                 parsed = self._parse_training_example(item)
                 self.training_examples.append(parsed)
             elif self.current_section == SYNONYM:
@@ -112,6 +113,7 @@ class MarkdownReader(TrainingDataReader):
                 )
             elif self.current_section == LOOKUP:
                 self._add_item_to_lookup(item)
+
 
     def _add_item_to_lookup(self, item):
         """Takes a list of lookup table dictionaries.  Finds the one associated
@@ -165,7 +167,17 @@ class MarkdownReader(TrainingDataReader):
         entities = self._find_entities_in_training_example(example)
         plain_text = re.sub(ent_regex, lambda m: m.groupdict()["entity_text"], example)
         self._add_synonyms(plain_text, entities)
-        message = Message(plain_text, {"intent": self.current_title})
+
+        msg_data = {}
+        if self.current_section == 'intent':
+            msg_data = {'intent': self.current_title, 'is_intent': True}
+
+        elif self.current_section == 'response':
+            msg_data = {'intent': 'chitchat', 'response': self.current_title, 'is_intent': False}
+
+        # msg_data = {'nlu_type': self.current_section, 'nlu_val': self.current_title}
+
+        message = Message(plain_text, msg_data)
         if len(entities) > 0:
             message.set("entities", entities)
         return message

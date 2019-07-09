@@ -8,6 +8,7 @@ DEFAULT_DOMAIN_PATH = "domain.yml"
 DEFAULT_ACTIONS_PATH = "actions"
 DEFAULT_MODELS_PATH = "models"
 DEFAULT_DATA_PATH = "data"
+# DEFAULT_RESPONSE_DATA_PATH = "data/automated_response"
 DEFAULT_RESULTS_PATH = "results"
 DEFAULT_REQUEST_TIMEOUT = 60 * 5  # 5 minutes
 
