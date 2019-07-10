@@ -213,12 +213,27 @@ class MarkdownWriter(TrainingDataWriter):
             key=lambda k: k["intent"],
         )
         md = ""
-        for i, example in enumerate(training_examples):
+
+        intent_examples = [ex for ex in training_examples if ex.get("is_intent")]
+        response_examples = [ex for ex in training_examples if not ex.get("is_intent")]
+
+        for i, example in enumerate(intent_examples):
             intent = training_examples[i - 1]["intent"]
             if i == 0 or intent != example["intent"]:
-                md += self._generate_section_header_md(
+                head = self._generate_section_header_md(
                     INTENT, example["intent"], i != 0
                 )
+                md += head
+
+            md += self._generate_item_md(self._generate_message_md(example))
+
+        for i, example in enumerate(response_examples):
+            response = training_examples[i - 1]["response"]
+            if i == 0 or response != example["response"]:
+                head = self._generate_section_header_md(
+                    RESPONSE, example["response"], i != 0
+                )
+                md += head
 
             md += self._generate_item_md(self._generate_message_md(example))
 

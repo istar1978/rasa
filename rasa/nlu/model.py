@@ -299,6 +299,11 @@ class Interpreter(object):
         model_metadata = Metadata.load(model_dir)
 
         Interpreter.ensure_model_compatibility(model_metadata)
+        if kwargs is None:
+            kwargs = {"include_test_intent": 0}
+        else:
+            kwargs["include_test_intent"] = 0
+
         return Interpreter.create(model_metadata, component_builder, skip_validation,kwargs=kwargs)
 
     @staticmethod
@@ -363,6 +368,7 @@ class Interpreter(object):
         time: Optional[datetime.datetime] = None,
         only_output_properties: bool = True,
         text_intent: Text = None,
+        text_response: Text = None
     ) -> Dict[Text, Any]:
         """Parse the input text, classify it and return pipeline result.
 
@@ -380,6 +386,9 @@ class Interpreter(object):
         message = Message(text, self.default_output_attributes(), time=time)
         if text_intent is not None:
             message.set("intent_target", text_intent)
+
+        if text_response is not None:
+            message.set("response_target", text_response)
 
         # print([e.get("intent") for e in self.context["test_data"].intent_examples])
         for component in self.pipeline:

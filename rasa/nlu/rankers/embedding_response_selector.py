@@ -182,6 +182,12 @@ class ResponseSelector(EmbeddingIntentClassifier):
             if "test_data" in kwargs:
 
                 response_target = message.get("response_target")
+
+                if message.get("response_target") is None:
+                    message.set("response", response, add_to_output=True)
+                    message.set("response_ranking", response_ranking, add_to_output=True)
+                    return
+
                 test_data = kwargs["test_data"]
 
                 if not self.is_test_data_featurized:
@@ -190,7 +196,7 @@ class ResponseSelector(EmbeddingIntentClassifier):
 
                     new_test_intents = list(set([example.get("response")
                                                  for example in test_data.intent_examples
-                                                 if example.get("response") not in self.inv_intent_dict.keys()]))
+                                                 if example.get("response") is not None and example.get("response") not in self.inv_intent_dict.keys()]))
 
                     self.test_intent_dict = {intent: idx + len(self.inv_intent_dict)
                                              for idx, intent in enumerate(sorted(new_test_intents))}
@@ -214,6 +220,7 @@ class ResponseSelector(EmbeddingIntentClassifier):
 
                     self.is_test_data_featurized = True
                     intent_target_id = self.test_intent_dict[response_target]
+
                 else:
                     intent_target_id = self.test_intent_dict[response_target]
 

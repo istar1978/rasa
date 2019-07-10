@@ -77,11 +77,17 @@ class TrainingData(object):
         for ex in examples:
             if ex.get("intent"):
                 ex.set("intent", ex.get("intent").strip())
+            if ex.get("response"):
+                ex.set("response", ex.get("response").strip())
         return examples
 
     @lazyproperty
     def intent_examples(self) -> List[Message]:
         return [ex for ex in self.training_examples if ex.get("intent")]
+
+    @lazyproperty
+    def response_examples(self) -> List[Message]:
+        return [ex for ex in self.training_examples if not ex.get("is_intent")]
 
     @lazyproperty
     def entity_examples(self) -> List[Message]:
@@ -93,10 +99,20 @@ class TrainingData(object):
         return set([ex.get("intent") for ex in self.training_examples]) - {None}
 
     @lazyproperty
+    def responses(self) -> Set[Text]:
+        return set([ex.get("response") for ex in self.training_examples if not ex.get("is_intent")])
+
+    @lazyproperty
     def examples_per_intent(self) -> Dict[Text, int]:
         """Calculates the number of examples per intent."""
         intents = [ex.get("intent") for ex in self.training_examples]
         return dict(Counter(intents))
+
+    @lazyproperty
+    def examples_per_response(self) -> Dict[Text, int]:
+        """Calculates the number of examples per response."""
+        responses = [ex.get("response") for ex in self.training_examples if not ex.get("is_intent")]
+        return dict(Counter(responses))
 
     @lazyproperty
     def entities(self) -> Set[Text]:
@@ -207,11 +223,24 @@ class TrainingData(object):
 
         train, test = [], []
         for intent, count in self.examples_per_intent.items():
+
+            if intent == "chitchat":
+                # Explicitly exclude chitchat as intent examples.
+                continue
+
             ex = [e for e in self.intent_examples if e.data["intent"] == intent]
             random.shuffle(ex)
             n_train = int(count * train_frac)
             train.extend(ex[:n_train])
             test.extend(ex[n_train:])
+
+        for response, count in self.examples_per_response.items():
+            if len(response.strip()):
+                ex = [e for e in self.intent_examples if e.get("response") == response]
+                random.shuffle(ex)
+                n_train = int(count * train_frac)
+                train.extend(ex[:n_train])
+                test.extend(ex[n_train:])
 
         data_train = TrainingData(
             train,

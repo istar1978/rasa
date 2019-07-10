@@ -579,16 +579,20 @@ def get_eval_data(interpreter, test_data):  # pragma: no cover
 
     logger.info("Running model for predictions:")
 
-    intent_results, entity_results = [], []
+    intent_results, response_results, entity_results = [], [], []
 
     intent_labels = [e.get("intent") for e in test_data.intent_examples]
+    response_labels = [e.get("response") for e in test_data.intent_examples if not e.get("is_intent")]
     should_eval_intents = (
         is_intent_classifier_present(interpreter) and len(set(intent_labels)) >= 2
+    )
+    should_eval_responses = (
+            is_response_selector_present(interpreter) and len(response_labels) >= 2
     )
     should_eval_entities = is_entity_extractor_present(interpreter)
 
     for example in tqdm(test_data.training_examples):
-        result = interpreter.parse(example.text, only_output_properties=False,text_intent=example.get('intent'))
+        result = interpreter.parse(example.text, only_output_properties=False,text_intent=example.get('intent'),text_response=example.get('response'))
 
         if should_eval_intents:
             intent_prediction = result.get("intent", {}) or {}
@@ -604,6 +608,21 @@ def get_eval_data(interpreter, test_data):  # pragma: no cover
                 )
             )
 
+        if should_eval_responses:
+            if result.get("response") != "":
+                response_prediction = result.get("response", {}) or {}
+                response_rankings = result.get("response_ranking", {}) or {}
+
+                response_results.append(
+                    IntentEvaluationResult(
+                        example.get("response", ""),
+                        response_prediction.get("name"),
+                        result.get("text", {}),
+                        response_prediction.get("confidence"),
+                        response_rankings,
+                    )
+                )
+
         if should_eval_entities:
             entity_results.append(
                 EntityEvaluationResult(
@@ -613,7 +632,7 @@ def get_eval_data(interpreter, test_data):  # pragma: no cover
                 )
             )
 
-    return intent_results, entity_results
+    return intent_results, response_results, entity_results
 
 
 def get_entity_extractors(interpreter):
@@ -639,6 +658,14 @@ def is_intent_classifier_present(interpreter):
         c.name for c in interpreter.pipeline if "intent" in c.provides
     ]
     return intent_classifiers != []
+
+def is_response_selector_present(interpreter):
+    """Checks whether response selector is present"""
+
+    response_selectors = [
+        c.name for c in interpreter.pipeline if "response" in c.provides
+    ]
+    return response_selectors != []
 
 
 def remove_pretrained_extractors(pipeline):
@@ -694,12 +721,18 @@ def run_evaluation(
     if report:
         utils.create_dir(report)
 
-    intent_results, entity_results = get_eval_data(interpreter, test_data)
+    intent_results, response_results, entity_results = get_eval_data(interpreter, test_data)
 
     if intent_results:
         logger.info("Intent evaluation results:")
         result["intent_evaluation"] = evaluate_intents(
             intent_results, report, successes, errors, confmat, histogram
+        )
+
+    if response_results:
+        logger.info("Response evaluation results:")
+        result["response_evaluation"] = evaluate_intents(
+            response_results, report, successes, errors, confmat, histogram
         )
 
     if entity_results:

@@ -120,7 +120,7 @@ class EmbeddingIntentClassifier(Component):
         # maximum similarity between embeddings of different intent labels
         "C_emb": 0.8,
         # dropout rate for rnn
-        "droprate": 0.2,
+        "droprate": 0.0,
 
         # flag: if true, the algorithm will split the intent labels into tokens
         #       and use bag-of-words representations for them
@@ -677,6 +677,7 @@ class EmbeddingIntentClassifier(Component):
 
         if self.similarity_type in {'cosine', 'inner'}:
             sim = tf.reduce_sum(a_pos * b, -1)
+
             sim_intent_emb = tf.reduce_sum(b[:, :1, :] * b[:, 1:, :], -1)
             if len(a.shape) == 3:
                 sim_input_emb = tf.reduce_sum(a[:, :1, :] * a[:, 1:, :], -1)
@@ -699,7 +700,7 @@ class EmbeddingIntentClassifier(Component):
         tf.summary.scalar('pos_action_loss',tf.reduce_mean(pos_loss))
         loss = pos_loss
 
-        sim_neg = tf.cond(is_training, lambda: sim[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs, lambda: tf.linalg.set_diag(sim, tf.zeros([tf.shape(sim)[0]],tf.float32)))
+        sim_neg = tf.cond(is_training, lambda: sim[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs, lambda: tf.linalg.set_diag(sim, tf.ones([tf.shape(sim)[0]],tf.float32) * large_compatible_negative(tf.float32) ))
         if self.use_max_sim_neg:
             # minimize only maximum similarity over incorrect actions
             max_sim_neg = tf.reduce_max(sim_neg, -1)
@@ -766,11 +767,15 @@ class EmbeddingIntentClassifier(Component):
         loss += tf.losses.get_regularization_loss()
         return loss
 
-    def tf_acc_op(self,sim_mat,is_training):
-
-        max_sim_id = tf.math.argmax(sim_mat,axis=-1)
+    def tf_acc_op(self,sim_mat,is_training, bad_negs):
+        sim_mat = tf.cond(is_training,
+                          lambda: tf.concat([sim_mat[:, :1],
+                                             sim_mat[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs], -1),
+                          lambda: sim_mat)
+        # if is_training sim[:, 1:] + large_compatible_negative(bad_negs.dtype) * bad_negs
+        max_sim_id = tf.math.argmax(sim_mat, axis=-1)
         max_sim = tf.reduce_max(sim_mat, axis=-1)
-        acc_op = tf.cond(is_training, lambda: tf.reduce_mean(tf.cast(tf.math.equal(max_sim_id, tf.zeros_like(max_sim_id)),
+        acc_op = tf.cond(is_training,lambda: tf.reduce_mean(tf.cast(tf.math.equal(max_sim_id, tf.zeros_like(max_sim_id)),
                                                                      dtype=tf.float32)),
                          lambda: tf.reduce_mean(tf.cast(tf.math.equal(max_sim, tf.linalg.tensor_diag_part(sim_mat)),
                                                                      dtype=tf.float32)))
@@ -946,7 +951,7 @@ class EmbeddingIntentClassifier(Component):
                                          is_training)
         else:
             raise
-        self.acc_op = self.tf_acc_op(self.sim_op, is_training)
+        self.acc_op = self.tf_acc_op(self.sim_op, is_training, self.bad_negs)
         tf.summary.scalar('total loss', loss)
         tf.summary.scalar('accuracy', self.acc_op)
         train_op = tf.train.AdamOptimizer().minimize(loss)
@@ -1012,10 +1017,13 @@ class EmbeddingIntentClassifier(Component):
                     # for i in range(11):
                     #     print(return_vals[i].shape)
 
+                    # print('Sim mat', return_vals[6])
+                    # print('Acc', )
+
                     batch_loss = return_vals[-3]
                     batch_acc = return_vals[-2]
 
-                    # print(batch_acc)
+                    # print('Acc', batch_acc)
 
                     train_tb_writer.add_summary(return_vals[-1], iter_num)
 
@@ -1063,9 +1071,15 @@ class EmbeddingIntentClassifier(Component):
 
                             return_vals = self.session.run(fetch_list)
 
+                            # print('Sim mat', return_vals[6])
+
                             summary = return_vals[-1]
                             batch_acc = return_vals[-2]
+
+                            # print('Acc', batch_acc)
+
                             batch_loss = return_vals[-3]
+
 
                             test_tb_writer.add_summary(summary, iter_num)
 
