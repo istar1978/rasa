@@ -1,12 +1,9 @@
 import glob
-import json
 import logging
 import os
 import shutil
-import tarfile
 import tempfile
-from _md5 import md5
-from typing import Text, Tuple, Union, Optional, List, Dict, Any
+from typing import Text, Tuple, Union, Optional, List, Dict
 
 import yaml.parser
 
@@ -18,12 +15,13 @@ from rasa.constants import (
     CONFIG_MANDATORY_KEYS,
 )
 
-# Type alias for the fingerprint
-from rasa.core import config
 from rasa.core.domain import Domain
 from rasa.core.utils import get_dict_hash
+from rasa.exceptions import ModelNotFound
+from rasa.utils.common import TempDirectoryPath
 
-Fingerprint = Dict[Text, Union[Text, List[Text]]]
+# Type alias for the fingerprint
+Fingerprint = Dict[Text, Union[Text, List[Text], int, float]]
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +37,9 @@ FINGERPRINT_NLU_DATA_KEY = "messages"
 FINGERPRINT_TRAINED_AT_KEY = "trained_at"
 
 
-def get_model(model_path: Text = DEFAULT_MODELS_PATH) -> Optional[Text]:
-    """Gets a model and unpacks it.
+def get_model(model_path: Text = DEFAULT_MODELS_PATH) -> TempDirectoryPath:
+    """Gets a model and unpacks it. Raises a `ModelNotFound` exception if
+    no model could be found at the provided path.
 
     Args:
         model_path: Path to the zipped model. If it's a directory, the latest
@@ -51,14 +50,22 @@ def get_model(model_path: Text = DEFAULT_MODELS_PATH) -> Optional[Text]:
 
     """
     if not model_path:
-        return None
-    elif os.path.isdir(model_path):
+        raise ModelNotFound("No path specified.")
+    elif not os.path.exists(model_path):
+        raise ModelNotFound("No file or directory at '{}'.".format(model_path))
+
+    if os.path.isdir(model_path):
         model_path = get_latest_model(model_path)
+        if not model_path:
+            raise ModelNotFound(
+                "Could not find any Rasa model files in '{}'.".format(model_path)
+            )
+    elif not model_path.endswith(".tar.gz"):
+        raise ModelNotFound(
+            "Path '{}' does not point to a Rasa model file.".format(model_path)
+        )
 
-    if model_path:
-        return unpack_model(model_path)
-
-    return None
+    return unpack_model(model_path)
 
 
 def get_latest_model(model_path: Text = DEFAULT_MODELS_PATH) -> Optional[Text]:
@@ -82,49 +89,9 @@ def get_latest_model(model_path: Text = DEFAULT_MODELS_PATH) -> Optional[Text]:
     return max(list_of_files, key=os.path.getctime)
 
 
-def add_evaluation_file_to_model(
-    model_path: Text, payload: Union[Text, Dict[Text, Any]], data_format: Text = "json"
-) -> Text:
-    """Adds NLU data `payload` to zipped model at `model_path`.
-
-    Args:
-        model_path: Path to zipped Rasa Stack model.
-        payload: Json payload to be added to the Rasa Stack model.
-        data_format: NLU data format of `payload` ('json' or 'md').
-
-    Returns:
-        Path of the new archive in a temporary directory.
-    """
-
-    # create temporary directory
-    tmpdir = tempfile.mkdtemp()
-
-    # unpack archive
-    _ = unpack_model(model_path, tmpdir)
-
-    # add model file to folder
-    if data_format == "json":
-        data_path = os.path.join(tmpdir, "data.json")
-        with open(data_path, "w") as f:
-            f.write(json.dumps(payload))
-    elif data_format == "md":
-        data_path = os.path.join(tmpdir, "nlu.md")
-        with open(data_path, "w") as f:
-            f.write(payload)
-    else:
-        raise ValueError("`data_format` needs to be either `md` or `json`.")
-
-    zipped_path = os.path.join(tmpdir, os.path.basename(model_path))
-
-    # re-archive and post
-    with tarfile.open(zipped_path, "w:gz") as tar:
-        for elem in os.scandir(tmpdir):
-            tar.add(elem.path, arcname=elem.name)
-
-    return zipped_path
-
-
-def unpack_model(model_file: Text, working_directory: Optional[Text] = None) -> Text:
+def unpack_model(
+    model_file: Text, working_directory: Optional[Text] = None
+) -> TempDirectoryPath:
     """Unpacks a zipped Rasa model.
 
     Args:
@@ -151,7 +118,7 @@ def unpack_model(model_file: Text, working_directory: Optional[Text] = None) -> 
     tar.close()
     logger.debug("Extracted model to '{}'.".format(working_directory))
 
-    return working_directory
+    return TempDirectoryPath(working_directory)
 
 
 def get_model_subdirectories(unpacked_model_path: Text) -> Tuple[Text, Text]:
@@ -271,20 +238,19 @@ def _get_hash_of_config(
         return ""
 
     try:
-        config_dict = rasa.utils.io.read_yaml_file(config_path)
+        config_dict = rasa.utils.io.read_config_file(config_path)
+        keys = include_keys or list(
+            filter(lambda k: k not in exclude_keys, config_dict.keys())
+        )
+
+        sub_config = dict((k, config_dict[k]) for k in keys if k in config_dict)
+
+        return get_dict_hash(sub_config)
     except yaml.parser.ParserError as e:
         logger.debug(
             "Failed to read config file '{}'. Error: {}".format(config_path, e)
         )
         return ""
-
-    keys = include_keys or list(
-        filter(lambda k: k not in exclude_keys, config_dict.keys())
-    )
-
-    sub_config = dict((k, config_dict[k]) for k in keys if k in config_dict)
-
-    return get_dict_hash(sub_config)
 
 
 def fingerprint_from_path(model_path: Text) -> Fingerprint:
@@ -414,17 +380,17 @@ def should_retrain(new_fingerprint: Fingerprint, old_model: Text, train_path: Te
     if old_model is None or not os.path.exists(old_model):
         return retrain_core, retrain_nlu
 
-    unpacked = unpack_model(old_model)
-    last_fingerprint = fingerprint_from_path(unpacked)
+    with unpack_model(old_model) as unpacked:
+        last_fingerprint = fingerprint_from_path(unpacked)
 
-    old_core, old_nlu = get_model_subdirectories(unpacked)
+        old_core, old_nlu = get_model_subdirectories(unpacked)
 
-    if not core_fingerprint_changed(last_fingerprint, new_fingerprint):
-        target_path = os.path.join(train_path, "core")
-        retrain_core = not merge_model(old_core, target_path)
+        if not core_fingerprint_changed(last_fingerprint, new_fingerprint):
+            target_path = os.path.join(train_path, "core")
+            retrain_core = not merge_model(old_core, target_path)
 
-    if not nlu_fingerprint_changed(last_fingerprint, new_fingerprint):
-        target_path = os.path.join(train_path, "nlu")
-        retrain_nlu = not merge_model(old_nlu, target_path)
+        if not nlu_fingerprint_changed(last_fingerprint, new_fingerprint):
+            target_path = os.path.join(train_path, "nlu")
+            retrain_nlu = not merge_model(old_nlu, target_path)
 
-    return retrain_core, retrain_nlu
+        return retrain_core, retrain_nlu

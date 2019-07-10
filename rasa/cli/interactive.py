@@ -10,7 +10,11 @@ from rasa import data, model
 
 # noinspection PyProtectedMember
 from rasa.cli.utils import get_validated_path, print_error
-from rasa.constants import DEFAULT_DATA_PATH, DEFAULT_MODELS_PATH
+from rasa.constants import (
+    DEFAULT_DATA_PATH,
+    DEFAULT_MODELS_PATH,
+    DEFAULT_ENDPOINTS_PATH,
+)
 from rasa.model import get_latest_model
 
 
@@ -44,7 +48,6 @@ def add_subparser(
 
 
 def interactive(args: argparse.Namespace):
-    args.finetune = False  # Don't support finetuning
     args.fixed_model_name = None
     args.store_uncompressed = False
 
@@ -58,7 +61,6 @@ def interactive(args: argparse.Namespace):
 
 
 def interactive_core(args: argparse.Namespace):
-    args.finetune = False  # Don't support finetuning
     args.fixed_model_name = None
     args.store_uncompressed = False
 
@@ -75,13 +77,16 @@ def perform_interactive_learning(args, zipped_model):
 
     if zipped_model and os.path.exists(zipped_model):
         args.model = zipped_model
-        model_path = model.unpack_model(zipped_model)
-        args.core, args.nlu = model.get_model_subdirectories(model_path)
-        stories_directory = data.get_core_directory(args.data)
 
-        do_interactive_learning(args, stories_directory)
+        with model.unpack_model(zipped_model) as model_path:
+            args.core, args.nlu = model.get_model_subdirectories(model_path)
+            stories_directory = data.get_core_directory(args.data)
 
-        shutil.rmtree(model_path)
+            args.endpoints = get_validated_path(
+                args.endpoints, "endpoints", DEFAULT_ENDPOINTS_PATH, True
+            )
+
+            do_interactive_learning(args, stories_directory)
     else:
         print_error(
             "Interactive learning process cannot be started as no initial model was "
