@@ -19,9 +19,9 @@ from __future__ import division
 from __future__ import print_function
 
 import re
-from innatis.classifiers.bert.optimization import create_optimizer
-from innatis.classifiers.bert.tokenization import convert_to_unicode, FullTokenizer
-from innatis.classifiers.bert.modeling import BertModel
+from rasa.nlu.classifiers.bert.optimization import create_optimizer
+from rasa.nlu.classifiers.bert.tokenization import convert_to_unicode, FullTokenizer
+from rasa.nlu.classifiers.bert.modeling import BertModel
 
 import tensorflow as tf
 import tensorflow_hub as hub
