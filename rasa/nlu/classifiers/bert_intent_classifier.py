@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 
 
 class BertIntentClassifier(Component):
-    """Intent classifier using BERT.
+    """
+    Intent classifier using BERT.
     """
 
     name = "BertIntentClassifier"
@@ -152,6 +153,23 @@ class BertIntentClassifier(Component):
         train_features = convert_examples_to_features(
             train_examples, self.label_list, self.max_seq_length, self.tokenizer
         )
+        
+        """
+        # creating small representative dataset for full post-training quantisation with TFLite
+        calibration_data = []
+        calibration_sample_indices = np.random.choice(range(len(train_features)), size=100, replace=False)
+        for idx in calibration_sample_indices:
+            f = train_features[idx]
+            datapoint = []
+            datapoint.append(np.array(f.input_ids).reshape(-1, self.max_seq_length).astype(np.int32))
+            datapoint.append(np.array(f.input_mask).reshape(-1, self.max_seq_length).astype(np.int32))
+            datapoint.append(np.array(f.label_id).reshape(-1).astype(np.int32))
+            datapoint.append(np.array(f.segment_ids).reshape(-1, self.max_seq_length).astype(np.int32))
+            calibration_data.append(datapoint)
+
+        with open('data/calibration_data.pickle', 'wb') as handle:
+            pickle.dump(calibration_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        """
 
         if self.pretrained_model_dir:
             bert_config = BertConfig.from_json_file(
@@ -198,26 +216,19 @@ class BertIntentClassifier(Component):
 
         # Classifier needs this to be non empty, so we set to first label.
         message.data["intent"] = self.label_list[0]
-        # print("Message: {}".format(message.text))
         predict_examples = get_test_examples([message])
-        # print("Examples:")
-        # [print(e.guid, e.text_a, e.text_b, e.label) for e in predict_examples]
         predict_features = convert_examples_to_features(
             predict_examples, self.label_list, self.max_seq_length, self.tokenizer
         )
-        # print("Features")
-        # [print("input ids", e.input_ids, "input mask", e.input_mask, "segment ids", e.segment_ids, "label id", e.label_id, e.is_real_example) for e in predict_features]
 
         # Get first index since we are only classifying text blob at a time.
         example = predict_features[0]
 
         use_tflite = True
         
-        # start = time.time()
+        start = time.time()
         if use_tflite:
-            
             input_ids = np.array(example.input_ids).reshape(-1, self.max_seq_length).astype(np.int32)
-            # print(input_ids.shape)
             self.interpreter.set_tensor(
                 self.in_indices["input_ids"], 
                 input_ids)
@@ -236,7 +247,7 @@ class BertIntentClassifier(Component):
             self.interpreter.set_tensor(
                 self.in_indices["segment_ids"], 
                 segment_ids)                
-            
+
             self.interpreter.invoke()
             result = self.interpreter.get_tensor(self.out_index)
             probabilities = list(np.exp(result[0]))        
@@ -256,10 +267,12 @@ class BertIntentClassifier(Component):
                 }
             )
             probabilities = list(np.exp(result["probabilities"])[0])        
-        # print("inference time: {:.3f}".format(time.time() - start))
-        # full inference time: 116.083s (0.1176s/message)
-        
-        # print(result)
+        print("inference time: {:.3f}".format(time.time() - start))
+        # size compression: from 408mb to around 110mb in all cases where optimisation is used, without opt it's ~437mb
+        # full:               116s (0.118s/message). micro f1: 0.884, macro f1: 0.921
+        # tflite, no optims:  597s (0.605s/message). micro f1: 0.884, macro f1: 0.921
+        # tflite, size:       1961s (1.99s/message). micro f1: 0.880, macro f1: 0.918
+        # tflite, latency:    2040s (2.07s/message). micro f1: 0.880, macro f1: 0.918
 
         index = np.argmax(probabilities)
         label = self.label_list[index]
@@ -277,8 +290,6 @@ class BertIntentClassifier(Component):
 
         message.set("intent", intent, add_to_output=True)
         message.set("intent_ranking", intent_ranking, add_to_output=True)
-        # print(intent)
-        # exit(0)
 
     def persist(self, file_name: Text, model_dir: Text) -> Dict[Text, Any]:
         """Persist this model into the passed directory.
@@ -323,35 +334,44 @@ class BertIntentClassifier(Component):
                 label_list = pickle.load(f)
 
             model_path = os.path.join(model_dir, [p for p in os.walk(model_dir)][0][1][0])
-            print(os.listdir(model_path))
-            # converter = tf.lite.TFLiteConverter.from_saved_model(model_path)
-            # tflite_model = converter.convert()
-            # open("converted_model.tflite", "wb").write(tflite_model)
 
             graph = tf.Graph()
             with graph.as_default():
                 sess = tf.Session()
                 predict_fn = predictor.from_saved_model(model_path)
-                [print(t) for t in predict_fn.feed_tensors]
-                [print(t) for t in predict_fn.fetch_tensors]
-                print(predict_fn.graph)
-                
-                # writer = tf.summary.FileWriter(logdir="tfgraph-full", graph=predict_fn.graph)
-                # writer.flush()
-                # exit()
+
                 in_tensor_names = ["input_ids", "input_mask", "label_ids", "segment_ids"]
-                # """
+
                 in_tensors = [predict_fn.feed_tensors[name] for name in in_tensor_names]
                 out_tensors = [t for _, t in predict_fn.fetch_tensors.items()]
                 converter = tf.lite.TFLiteConverter.from_session(
                     predict_fn.session, in_tensors, out_tensors
                 )
-
+                
+                # """
                 converter.optimizations = [
-                    # tf.lite.Optimize.DEFAULT # 4s (~219it/s) (4.604s invoking time)
+                    tf.lite.Optimize.DEFAULT # 4s (~219it/s) (4.604s invoking time)
                     # tf.lite.Optimize.OPTIMIZE_FOR_SIZE # 4s (~220it/s) (4.707s invoking time)
-                    tf.lite.Optimize.OPTIMIZE_FOR_LATENCY # 4s (~215it/s) (4.630s invoking time)
+                    # tf.lite.Optimize.OPTIMIZE_FOR_LATENCY # 4s (~215it/s) (4.630s invoking time)
                 ]
+                # """
+
+
+                """
+                # representative dataset: generator, each element is a list of input items, 
+                # items are passed to in_tensors in the order established when creating the converter
+                # https://github.com/tensorflow/tensorflow/blob/d883916ee45f3af81e81eefb7e8495d9fab6d231/tensorflow/lite/python/optimize/calibration_wrapper.cc#L110
+
+                with open('data/calibration_data.pickle', 'rb') as handle:
+                    calibration_data = pickle.load(handle)
+
+                def representative_dataset_gen():
+                    for d in calibration_data[:5]:
+                        yield d
+                converter.representative_dataset = tf.lite.RepresentativeDataset(representative_dataset_gen)
+                """
+
+                # https://github.com/tensorflow/tensorflow/blob/61128913681a016033143fbe9b60140d983b3c98/tensorflow/lite/tools/optimize/quantize_model.cc
                 tflite_model = converter.convert()
                 open(tflite_model_file, "wb").write(tflite_model)
                 # """
@@ -365,17 +385,14 @@ class BertIntentClassifier(Component):
 
                 obj.interpreter = tf.lite.Interpreter(model_path=tflite_model_file)
                 obj.interpreter.allocate_tensors()
-                # exit()
+
                 obj.in_indices = {}
                 for i, in_name in enumerate(in_tensor_names):
-                    print(in_name, obj.interpreter.get_input_details()[i]["shape"])
+                    # print(in_name, obj.interpreter.get_input_details()[i]["shape"])
                     obj.in_indices[in_name] = obj.interpreter.get_input_details()[i]["index"]
-                # obj.interpreter.set_tensor(obj.interpreter.get_input_details()[1]["index"], 
-                #                            obj.all_intents_embed_values)
 
                 obj.out_index = obj.interpreter.get_output_details()[0]["index"]
-                print(obj.in_indices, obj.out_index)
-                # exit()
+
                 return obj
 
         else:
