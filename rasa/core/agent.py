@@ -13,35 +13,40 @@ import rasa
 import rasa.utils.io
 from rasa.constants import DEFAULT_DOMAIN_PATH, LEGACY_DOCS_BASE_URL
 from rasa.core import constants, jobs, training
-from rasa.core.channels import (
+from rasa.core.channels.channel import (
     InputChannel,
     OutputChannel,
     UserMessage,
     CollectingOutputChannel,
 )
 from rasa.core.constants import DEFAULT_REQUEST_TIMEOUT
-from rasa.core.domain import Domain, InvalidDomain, check_domain_sanity
+from rasa.core.domain import Domain, InvalidDomain
 from rasa.core.exceptions import AgentNotReady
 from rasa.core.interpreter import NaturalLanguageInterpreter, RegexInterpreter
 from rasa.core.nlg import NaturalLanguageGenerator
-from rasa.core.policies import FormPolicy, Policy
+from rasa.core.policies.policy import Policy
+from rasa.core.policies.form_policy import FormPolicy
 from rasa.core.policies.ensemble import PolicyEnsemble, SimplePolicyEnsemble
 from rasa.core.policies.memoization import MemoizationPolicy
 from rasa.core.processor import MessageProcessor
 from rasa.core.tracker_store import InMemoryTrackerStore, TrackerStore
 from rasa.core.trackers import DialogueStateTracker
 from rasa.core.utils import LockCounter
-from rasa.model import get_model_subdirectories, get_latest_model, unpack_model
+from rasa.model import (
+    get_model_subdirectories,
+    get_latest_model,
+    unpack_model,
+    get_model,
+)
 from rasa.nlu.utils import is_url
 from rasa.utils.common import update_sanic_log_level, set_log_level
 from rasa.utils.endpoints import EndpointConfig
+from rasa.exceptions import ModelNotFound
 
 logger = logging.getLogger(__name__)
 
 
-async def load_from_server(
-    agent, model_server: Optional[EndpointConfig] = None
-) -> "Agent":
+async def load_from_server(agent: "Agent", model_server: EndpointConfig) -> "Agent":
     """Load a persisted model from a server."""
 
     # We are going to pull the model once first, and then schedule a recurring
@@ -222,18 +227,7 @@ async def load_agent(
     action_endpoint: Optional[EndpointConfig] = None,
 ):
     try:
-        if model_path is not None and os.path.exists(model_path):
-            return Agent.load_local_model(
-                model_path,
-                interpreter=interpreter,
-                generator=generator,
-                tracker_store=tracker_store,
-                action_endpoint=action_endpoint,
-                model_server=model_server,
-                remote_storage=remote_storage,
-            )
-
-        elif model_server is not None:
+        if model_server is not None:
             return await load_from_server(
                 Agent(
                     interpreter=interpreter,
@@ -257,8 +251,19 @@ async def load_agent(
                 model_server=model_server,
             )
 
+        elif model_path is not None and os.path.exists(model_path):
+            return Agent.load_local_model(
+                model_path,
+                interpreter=interpreter,
+                generator=generator,
+                tracker_store=tracker_store,
+                action_endpoint=action_endpoint,
+                model_server=model_server,
+                remote_storage=remote_storage,
+            )
+
         else:
-            logger.error("No valid configuration given to load agent.")
+            logger.warning("No valid configuration given to load agent.")
             return None
 
     except Exception as e:
@@ -311,7 +316,7 @@ class Agent(object):
 
     def update_model(
         self,
-        domain: Union[Text, Domain],
+        domain: Domain,
         policy_ensemble: PolicyEnsemble,
         fingerprint: Optional[Text],
         interpreter: Optional[NaturalLanguageInterpreter] = None,
@@ -335,7 +340,7 @@ class Agent(object):
     @classmethod
     def load(
         cls,
-        unpacked_model_path: Text,
+        model_path: Text,
         interpreter: Optional[NaturalLanguageInterpreter] = None,
         generator: Union[EndpointConfig, NaturalLanguageGenerator] = None,
         tracker_store: Optional[TrackerStore] = None,
@@ -344,21 +349,23 @@ class Agent(object):
         remote_storage: Optional[Text] = None,
     ) -> "Agent":
         """Load a persisted model from the passed path."""
-        if not os.path.exists(unpacked_model_path) or not os.path.isdir(
-            unpacked_model_path
-        ):
+        try:
+            if not model_path:
+                raise ModelNotFound("No path specified.")
+            elif not os.path.exists(model_path):
+                raise ModelNotFound("No file or directory at '{}'.".format(model_path))
+            elif os.path.isfile(model_path):
+                model_path = get_model(model_path)
+        except ModelNotFound:
             raise ValueError(
-                "You are trying to load a MODEL from "
-                "('{}'), which is not possible. \n"
-                "The persisted path should be a directory "
-                "containing the various model files in the "
-                "sub-directories 'core' and 'nlu'. \n\n"
-                "If you want to load training data instead of "
-                "a model, use `agent.load_data(...)` "
-                "instead.".format(unpacked_model_path)
+                "You are trying to load a MODEL from '{}', which is not possible. \n"
+                "The model path should be a 'tar.gz' file or a directory "
+                "containing the various model files in the sub-directories 'core' "
+                "and 'nlu'. \n\nIf you want to load training data instead of "
+                "a model, use `agent.load_data(...)` instead.".format(model_path)
             )
 
-        core_model, nlu_model = get_model_subdirectories(unpacked_model_path)
+        core_model, nlu_model = get_model_subdirectories(model_path)
 
         if not interpreter and os.path.exists(nlu_model):
             interpreter = NaturalLanguageInterpreter.create(nlu_model)
@@ -380,7 +387,7 @@ class Agent(object):
             generator=generator,
             tracker_store=tracker_store,
             action_endpoint=action_endpoint,
-            model_directory=unpacked_model_path,
+            model_directory=model_path,
             model_server=model_server,
             remote_storage=remote_storage,
         )
@@ -398,7 +405,7 @@ class Agent(object):
         message: UserMessage,
         message_preprocessor: Optional[Callable[[Text], Text]] = None,
         **kwargs
-    ) -> Optional[List[Text]]:
+    ) -> Optional[List[Dict[Text, Any]]]:
         """Handle a single message."""
 
         if not isinstance(message, UserMessage):
@@ -450,7 +457,7 @@ class Agent(object):
                 )
 
     # noinspection PyUnusedLocal
-    def predict_next(self, sender_id: Text, **kwargs: Any) -> Dict[Text, Any]:
+    def predict_next(self, sender_id: Text, **kwargs: Any) -> Optional[Dict[Text, Any]]:
         """Handle a single message."""
 
         processor = self.create_processor()
@@ -663,8 +670,6 @@ class Agent(object):
 
         logger.debug("Agent trainer got kwargs: {}".format(kwargs))
 
-        check_domain_sanity(self.domain)
-
         self.policy_ensemble.train(training_trackers, self.domain, **kwargs)
         self._set_fingerprint()
 
@@ -678,6 +683,13 @@ class Agent(object):
         """Start a webserver attaching the input channels and handling msgs."""
 
         from rasa.core import run
+
+        logger.warning(
+            "DEPRECATION warning: Using `handle_channels` is deprecated. "
+            "Please use `rasa.run(...)` or see "
+            "`rasa.core.run.configure_app(...)` if you want to implement "
+            "this on a more detailed level."
+        )
 
         app = run.configure_app(channels, cors, None, enable_api=False, route=route)
 
@@ -805,10 +817,12 @@ class Agent(object):
         )
 
     @staticmethod
-    def _create_domain(domain: Union[None, Domain, Text]) -> Domain:
+    def _create_domain(domain: Union[Domain, Text]) -> Domain:
 
         if isinstance(domain, str):
-            return Domain.load(domain)
+            domain = Domain.load(domain)
+            domain.check_missing_templates()
+            return domain
         elif isinstance(domain, Domain):
             return domain
         elif domain is not None:
@@ -887,7 +901,7 @@ class Agent(object):
         tracker_store: Optional[TrackerStore] = None,
         action_endpoint: Optional[EndpointConfig] = None,
         model_server: Optional[EndpointConfig] = None,
-    ) -> "Agent":
+    ) -> Optional["Agent"]:
         from rasa.nlu.persistor import get_persistor
 
         persistor = get_persistor(remote_storage)
@@ -911,7 +925,7 @@ class Agent(object):
     def _is_form_policy_present(self) -> bool:
         """Check whether form policy is present and used."""
 
-        has_form_policy = self.policy_ensemble and any(
+        has_form_policy = self.policy_ensemble is not None and any(
             isinstance(p, FormPolicy) for p in self.policy_ensemble.policies
         )
         return not self.domain or not self.domain.form_names or has_form_policy

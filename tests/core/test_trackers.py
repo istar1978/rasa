@@ -1,16 +1,20 @@
+import asyncio
 import json
 
 import fakeredis
 import pytest
 import tempfile
 import os
+import logging
 
 import rasa.utils.io
 from rasa.core import training, restore
 from rasa.core import utils
+from rasa.core.slots import Slot
 from rasa.core.actions.action import ACTION_LISTEN_NAME
 from rasa.core.domain import Domain
 from rasa.core.events import (
+    SlotSet,
     UserUttered,
     ActionExecuted,
     Restarted,
@@ -37,9 +41,11 @@ domain = Domain.load("examples/moodbot/domain.yml")
 
 @pytest.fixture(scope="module")
 def loop():
-    from pytest_sanic.plugin import loop as sanic_loop
-
-    return rasa.utils.io.enable_async_loop_debugging(next(sanic_loop()))
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop = rasa.utils.io.enable_async_loop_debugging(loop)
+    yield loop
+    loop.close()
 
 
 class MockRedisTrackerStore(RedisTrackerStore):
@@ -564,3 +570,15 @@ def test_last_executed_has_not_name():
     tracker = get_tracker(events)
 
     assert tracker.last_executed_action_has("another") is False
+
+
+@pytest.mark.parametrize("key, value", [("asfa", 1), ("htb", None)])
+def test_tracker_without_slots(key, value, caplog):
+    event = SlotSet(key, value)
+    tracker = DialogueStateTracker.from_dict("any", [])
+    assert key in tracker.slots
+    with caplog.at_level(logging.INFO):
+        event.apply_to(tracker)
+        v = tracker.get_slot(key)
+        assert v == value
+    assert len(caplog.records) == 0

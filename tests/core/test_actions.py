@@ -1,6 +1,5 @@
 import pytest
 from aioresponses import aioresponses
-from httpretty import httpretty
 
 import rasa.core
 from rasa.core.actions import action
@@ -23,7 +22,7 @@ from rasa.core.actions.action import (
     ActionUtterTemplate,
     RemoteAction,
 )
-from rasa.core.domain import Domain
+from rasa.core.domain import Domain, InvalidDomain
 from rasa.core.events import Restarted, SlotSet, UserUtteranceReverted, BotUttered
 from rasa.core.nlg.template import TemplatedNaturalLanguageGenerator
 from rasa.core.trackers import DialogueStateTracker
@@ -78,7 +77,7 @@ def test_action_instantiation_from_names():
 
 def test_domain_action_instantiation():
     domain = Domain(
-        intent_properties={},
+        intents={},
         entities=[],
         slots=[],
         templates={},
@@ -99,18 +98,6 @@ def test_domain_action_instantiation():
     assert instantiated_actions[7].name() == ACTION_BACK_NAME
     assert instantiated_actions[8].name() == "my_module.ActionTest"
     assert instantiated_actions[9].name() == "utter_test"
-
-
-def test_domain_fails_on_duplicated_actions():
-    with pytest.raises(ValueError):
-        Domain(
-            intent_properties={},
-            entities=[],
-            slots=[],
-            templates={},
-            action_names=["random_name", "random_name"],
-            form_names=[],
-        )
 
 
 async def test_remote_action_runs(
@@ -214,7 +201,7 @@ async def test_remote_action_without_endpoint(
         await remote_action.run(
             default_channel, default_nlg, default_tracker, default_domain
         )
-    assert "you didn't configure an endpoint" in str(execinfo.value)
+    assert "Failed to execute custom action." in str(execinfo.value)
 
 
 async def test_remote_action_endpoint_not_running(

@@ -19,7 +19,7 @@ from rasa.utils.common import is_logging_disabled
 logger = logging.getLogger(__name__)
 
 if typing.TYPE_CHECKING:
-    import tensorflow as tf
+    from tensorflow import Graph, Session, Tensor
     from rasa.nlu.config import RasaNLUModelConfig
     from rasa.nlu.training_data import TrainingData
     from rasa.nlu.model import Metadata
@@ -27,6 +27,9 @@ if typing.TYPE_CHECKING:
 
 try:
     import tensorflow as tf
+
+    # avoid warning println on contrib import - remove for tf 2
+    tf.contrib._warning = None
 except ImportError:
     tf = None
 
@@ -358,7 +361,6 @@ class EmbeddingIntentClassifier(Component):
 
         return X, Y, intents_for_X
 
-    # tf helpers:
     def _create_tf_embed_nn(self, x_in: 'tf.Tensor', is_training: 'tf.Tensor',
                             layer_sizes: List[int], name: Text) -> 'tf.Tensor':
         """Create nn with hidden layers and name"""
@@ -691,6 +693,7 @@ class EmbeddingIntentClassifier(Component):
                              "should be 'cosine' or 'inner'"
                              "".format(self.similarity_type))
 
+
     def _tf_loss_margin(self, sim: 'tf.Tensor', sim_intent_emb: 'tf.Tensor', sim_input_emb: 'tf.Tensor', bad_negs, is_training: 'tf.Tensor') -> 'tf.Tensor':
         """Define loss"""
 
@@ -824,7 +827,6 @@ class EmbeddingIntentClassifier(Component):
 
         return tf.cast(tf.reshape(tf.sparse_tensor_to_dense(sparse), shape), tf.float32)
 
-    # noinspection PyPep8Naming
     def train(self,
               training_data: 'TrainingData',
               cfg: Optional['RasaNLUModelConfig'] = None,

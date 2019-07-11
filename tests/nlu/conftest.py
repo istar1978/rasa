@@ -6,8 +6,6 @@ import pytest
 from rasa.nlu import config, train
 from rasa.nlu.components import ComponentBuilder
 
-logging.basicConfig(level="DEBUG")
-
 CONFIG_DEFAULTS_PATH = "sample_configs/config_defaults.yml"
 
 NLU_DEFAULT_CONFIG_PATH = "sample_configs/config_pretrained_embeddings_mitie.yml"
@@ -32,17 +30,6 @@ def component_builder():
 def spacy_nlp(component_builder, default_config):
     spacy_nlp_config = {"name": "SpacyNLP"}
     return component_builder.create_component(spacy_nlp_config, default_config).nlp
-
-
-@pytest.fixture(scope="session")
-def trained_moodbot_path():
-    _, _, persisted_path = train(
-        data="examples/moodbot/data/nlu.md",
-        nlu_config="examples/moodbot/config.yml",
-        path=MOODBOT_MODEL_PATH,
-    )
-
-    return persisted_path
 
 
 @pytest.fixture(scope="session")
