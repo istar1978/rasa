@@ -20,6 +20,8 @@ if typing.TYPE_CHECKING:
     from rasa.nlu.training_data import TrainingData
     from rasa.nlu.model import Metadata
     from rasa.nlu.training_data import Message
+    from collections import Counter
+    import pandas as pd
 
 try:
     import tensorflow as tf
@@ -82,7 +84,9 @@ class ResponseSelector(EmbeddingIntentClassifier):
         "layer_norm": True,
         # initial and final batch sizes - batch size will be
         # linearly increased for each epoch
-        "batch_size": [64, 128],
+        # "batch_size": [64, 128],
+        "batch_size": 64,
+        "stratified_batch": True,
         # number of epochs
         "epochs": 300,
 
@@ -287,7 +291,7 @@ class ResponseSelector(EmbeddingIntentClassifier):
         with self.graph.as_default():
             # set random seed
             batch_size_in, is_training, iterator, loss, train_init_op, train_op, val_init_op = self.build_train_graph(X,
-                                                                                                                      Y)
+                                                                                                                      Y,intents_for_X)
             self.session = tf.Session()
 
             self._train_tf_dataset(train_init_op, val_init_op, batch_size_in, loss, is_training, train_op, tb_sum_dir)

@@ -181,6 +181,21 @@ def remove_model(model_dir: Text) -> bool:
             "directory".format(model_dir)
         )
 
+def pycloud_unpickle(file_name: Text) -> Any:
+    """Unpickle an object from file using cloudpickle."""
+    import cloudpickle
+
+    with io.open(file_name, "rb") as f:  # pragma: no test
+        return cloudpickle.load(f, encoding="latin-1")
+
+
+def pycloud_pickle(file_name: Text, obj: Any) -> None:
+    """Pickle an object to a file using cloudpickle."""
+    import cloudpickle
+
+    with io.open(file_name, "wb") as f:
+        cloudpickle.dump(obj, f)
+
 
 def json_unpickle(file_name: Text) -> Any:
     """Unpickle an object from file using json."""
@@ -202,3 +217,5 @@ def json_pickle(file_name: Text, obj: Any) -> None:
 
     with open(file_name, "w", encoding="utf-8") as f:
         f.write(jsonpickle.dumps(obj))
+
+

@@ -15,6 +15,8 @@ from tensor2tensor.layers.common_attention import add_timing_signal_1d, large_co
 from rasa.nlu.classifiers import INTENT_RANKING_LENGTH, NUM_INTENT_CANDIDATES
 from rasa.nlu.components import Component
 from rasa.utils.common import is_logging_disabled
+from sklearn.model_selection import train_test_split
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +85,9 @@ class EmbeddingIntentClassifier(Component):
         "layer_norm": True,
         # initial and final batch sizes - batch size will be
         # linearly increased for each epoch
-        "batch_size": [64, 128],
+        # "batch_size": [64, 128],
+        "batch_size": 64,
+        "stratified_batch": True,
         # number of epochs
         "epochs": 300,
 
@@ -225,6 +229,7 @@ class EmbeddingIntentClassifier(Component):
         self.use_last = config['use_last']
 
         self.batch_size = config['batch_size']
+        self.stratified_batch = config['stratified_batch']
         self.epochs = config['epochs']
 
     def _load_embedding_params(self, config: Dict[Text, Any]) -> None:
@@ -270,6 +275,8 @@ class EmbeddingIntentClassifier(Component):
         self._load_regularization_params(self.component_config)
         self._load_flag_if_tokenize_intents(self.component_config)
         self._load_visual_params(self.component_config)
+
+
 
     # package safety checks
     @classmethod
@@ -849,6 +856,9 @@ class EmbeddingIntentClassifier(Component):
         X, Y, intents_for_X = self._prepare_data_for_training(
             training_data, intent_dict)
 
+
+        print('Shapes', X[0].shape, Y[0].shape, type(X[0]))
+
         if self.share_embedding:
             if X[0].shape[-1] != Y[0].shape[-1]:
                 raise ValueError("If embeddings are shared "
@@ -868,7 +878,7 @@ class EmbeddingIntentClassifier(Component):
         with self.graph.as_default():
             # set random seed
             batch_size_in, is_training, iterator, loss, train_init_op, train_op, val_init_op = self.build_train_graph(X,
-                                                                                                                      Y)
+                                                                                                                      Y, intents_for_X)
             self.session = tf.Session()
 
             self._train_tf_dataset(train_init_op, val_init_op, batch_size_in, loss, is_training, train_op, tb_sum_dir)
@@ -893,48 +903,110 @@ class EmbeddingIntentClassifier(Component):
 
             self.sim_all, _, _ = self._tf_sim(self.word_embed, self.all_intents_embed_in)
 
-    def build_train_graph(self, X, Y):
-        np.random.seed(self.random_seed)
-        tf.set_random_seed(self.random_seed)
+    # def gen_next_batch(self, X, Y, intents_for_X, batch_size):
+    #
+    #     def gen_random_batch(X, Y, batch_size):
+    #
+    #         while True:
+    #             batch_ids = np.random.choice(X.shape[0], batch_size)[0]
+    #
+    #             batch_x = X[batch_ids]
+    #             batch_y = Y[batch_ids]
+    #
+    #             yield batch_x, batch_y
+    #             # yield self._to_sparse_tensor(batch_x), self._to_sparse_tensor(batch_y)
+    #
+    #     def gen_stratified_batch(X, Y, intents_for_X, batch_size):
+    #
+    #         num_batches = X.shape[0] // batch_size
+    #         batch_ex_per_intent = batch_size//len(set(intents_for_X))
+    #
+    #         df = pd.DataFrame(dict(X=X,Y=Y,labels=intents_for_X))
+    #
+    #         for index in range(num_batches):
+    #
+    #             sampled_df = df.groupby('labels', group_keys=False).apply(lambda x: x.sample(min(X.shape[0], batch_ex_per_intent)))
+    #
+    #             batch_x = sampled_df['X'].tolist()
+    #             batch_y = sampled_df['Y'].tolist()
+    #
+    #             # yield self._to_sparse_tensor(np.array(batch_x)), self._to_sparse_tensor(np.array(batch_y))
+    #             yield np.array(batch_x), np.array(batch_y)
+    #
+    #     return lambda: gen_random_batch(X,Y,batch_size) if not self.stratified_batch else gen_stratified_batch(X,Y,intents_for_X,batch_size)
+
+    def gen_stratified_batch(self, X, Y, intents_for_X, batch_size):
+
+
+        num_batches = X.shape[0] // batch_size
+        batch_ex_per_intent = max(batch_size//len(set(intents_for_X)), 1)
+
+        df = pd.DataFrame({'X': X.tolist(), 'Y': Y.tolist(), 'labels': intents_for_X.tolist()})
+
+        for batch_idx in range(num_batches):
+
+            sampled_df = df.groupby('labels', group_keys=False).apply(lambda x: x.sample(min(X.shape[0], batch_ex_per_intent),replace=True))
+            batch_x = sampled_df['X'].tolist()
+            batch_y = sampled_df['Y'].tolist()
+
+
+            # yield self._to_sparse_tensor(np.array(batch_x)), self._to_sparse_tensor(np.array(batch_y))
+            yield np.array(batch_x), np.array(batch_y)
+
+
+    def get_train_valid_init_op(self, X, Y, intents_for_X, **kwargs):
+
+        train_gen_params = []
+        if 'train_params' in kwargs:
+            train_gen_params = kwargs['train_params']
+
         if self.evaluate_on_num_examples:
 
-            shuffled_ids = np.random.permutation(len(X))
-            val_ids = shuffled_ids[:self.evaluate_on_num_examples]
-            train_ids = shuffled_ids[self.evaluate_on_num_examples:]
-            # ids = [0, 1, 2]
-            # [print(self.inv_intent_dict[intent]) for intent in intents_for_X[ids]]
-            # exit()
-            X_tensor_val = self._to_sparse_tensor(X[val_ids])
-            Y_tensor_val = self._to_sparse_tensor(Y[val_ids])
+            X_train, X_val, Y_train, Y_val, X_train_intents, X_val_intents = train_test_split(X,Y,intents_for_X,test_size=self.evaluate_on_num_examples,stratify=intents_for_X)
 
-            X_tensor = self._to_sparse_tensor(X[train_ids])
-            Y_tensor = self._to_sparse_tensor(Y[train_ids])
+            train_dpt_types = (tf.float32, tf.float32)
 
-            val_dataset = tf.data.Dataset.from_tensor_slices((X_tensor_val, Y_tensor_val)).batch(self.validation_bs)
+            train_dpt_shapes = ([None, X_train[0].shape[-1]], [None, Y_train[0].shape[-1]])
+
+            # print(X_train.shape,X_val.shape,Y_train.shape, Y_val.shape)
+
+            train_dataset = tf.data.Dataset.from_generator(lambda: self.gen_stratified_batch(X_train, Y_train, X_train_intents, self.batch_size),
+                                                           output_types=train_dpt_types, output_shapes=train_dpt_shapes)
+
+            val_dataset = tf.data.Dataset.from_generator(lambda: self.gen_stratified_batch(X_val, Y_val, X_val_intents,self.validation_bs),
+                                                           output_types=train_dpt_types, output_shapes = train_dpt_shapes)
+
         else:
-            val_dataset = None
-            X_tensor = self._to_sparse_tensor(X)
-            Y_tensor = self._to_sparse_tensor(Y)
+
+            train_dpt_types = (tf.float32, tf.float32)
+            train_dataset = tf.data.Dataset.from_generator(
+                lambda x: self.gen_stratified_batch(X, Y, intents_for_X, x),
+                output_types=train_dpt_types, args=([train_gen_params]))
+
+        # create general iterator
+        iterator = tf.data.Iterator.from_structure(train_dataset.output_types, train_dataset.output_shapes)
+        batch = iterator.get_next()
+
+        # make datasets that we can initialize separately, but using the same structure via the common iterator
+        training_init_op = iterator.make_initializer(train_dataset, name="training_init_op")
+
+        if self.evaluate_on_num_examples:
+            validation_init_op = iterator.make_initializer(val_dataset, name="validation_init_op")
+            return batch, training_init_op, validation_init_op, iterator
+        else:
+            return batch, training_init_op, None, iterator
+
+    def build_train_graph(self, X, Y, intents_for_X):
+        np.random.seed(self.random_seed)
+        tf.set_random_seed(self.random_seed)
+
         batch_size_in = tf.placeholder(tf.int64)
-        train_dataset = tf.data.Dataset.from_tensor_slices((X_tensor, Y_tensor))
-        train_dataset = train_dataset.shuffle(buffer_size=len(X))
-        train_dataset = train_dataset.batch(batch_size_in, drop_remainder=self.fused_lstm)
-        # tf.summary.scalar("batch_size", batch_size_in)
-        if len(train_dataset.output_shapes[0]) == 2:
-            train_dataset_output_shapes_X = train_dataset.output_shapes[0]
-        else:
-            train_dataset_output_shapes_X = (None, None, train_dataset.output_shapes[0][-1])
-        if len(train_dataset.output_shapes[1]) == 2:
-            train_dataset_output_shapes_Y = train_dataset.output_shapes[1]
-        else:
-            train_dataset_output_shapes_Y = (None, None, train_dataset.output_shapes[1][-1])
-        iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
-                                                   (train_dataset_output_shapes_X, train_dataset_output_shapes_Y),
-                                                   output_classes=train_dataset.output_classes)
-        # iterator = train_dataset.make_initializable_iterator()
-        a_sparse, b_sparse = iterator.get_next()
-        self.a_raw = self._sparse_tensor_to_dense(a_sparse, X[0].shape[-1])
-        self.b_raw = self._sparse_tensor_to_dense(b_sparse, Y[0].shape[-1])
+        (self.a_raw, self.b_raw), train_init_op, val_init_op, iterator = self.get_train_valid_init_op(X, Y, intents_for_X, kwargs={'train_params': batch_size_in})
+
+        # print(self.a_raw,self.b_raw)
+        # print(a_sparse,b_sparse)
+        # self.a_raw = self._sparse_tensor_to_dense(a_sparse, X[0].shape[-1])
+        # self.b_raw = self._sparse_tensor_to_dense(b_sparse, Y[0].shape[-1])
         is_training = tf.placeholder_with_default(False, shape=())
         self.word_embed = self._create_tf_embed_a(self.a_raw, is_training)
         self.intent_embed = self._create_tf_embed_b(self.b_raw, is_training)
@@ -957,11 +1029,7 @@ class EmbeddingIntentClassifier(Component):
         tf.summary.scalar('total loss', loss)
         tf.summary.scalar('accuracy', self.acc_op)
         train_op = tf.train.AdamOptimizer().minimize(loss)
-        train_init_op = iterator.make_initializer(train_dataset)
-        if self.evaluate_on_num_examples:
-            val_init_op = iterator.make_initializer(val_dataset)
-        else:
-            val_init_op = None
+
         self.summary_merged_op = tf.summary.merge_all()
         return batch_size_in, is_training, iterator, loss, train_init_op, train_op, val_init_op
 
@@ -1093,10 +1161,6 @@ class EmbeddingIntentClassifier(Component):
                             break
 
 
-                        # print('Validation run')
-                        # for i in range(11):
-                        #     print(return_vals[i].shape)
-
                         ep_val_loss += batch_loss
                         ep_val_acc += batch_acc
                         iter_num += 1
@@ -1108,21 +1172,21 @@ class EmbeddingIntentClassifier(Component):
                     ep_val_loss /= val_num_batches
                     ep_val_acc /= val_num_batches
 
-                pbar.set_postfix({
-                    "Train loss": "{:.3f}".format(ep_train_loss),
-                    "Train acc": "{:.3f}".format(ep_train_acc),
-                    "Val loss": "{:.3f}".format(ep_val_loss),
-                    "Val acc": "{:.3f}".format(ep_val_acc)
-                })
+                    pbar.set_postfix({
+                        "Train loss": "{:.3f}".format(ep_train_loss),
+                        "Train acc": "{:.3f}".format(ep_train_acc),
+                        "Val loss": "{:.3f}".format(ep_val_loss),
+                        "Val acc": "{:.3f}".format(ep_val_acc)
+                    })
             else:
                 pbar.set_postfix({
                     "loss": "{:.3f}".format(ep_train_loss)
                 })
 
-        if self.evaluate_on_num_examples:
-            logger.info("Finished training, "
-                        "Train loss : {:.3f}, train accuracy: {:.3f}, val loss : {:.3f}, val accuracy: {:.3f}"
-                        "".format(ep_train_loss, ep_train_acc, ep_val_loss, ep_val_acc))
+        # if self.evaluate_on_num_examples:
+        #     logger.info("Finished training, "
+        #                 "Train loss : {:.3f}, train accuracy: {:.3f}, val loss : {:.3f}, val accuracy: {:.3f}"
+        #                 "".format(ep_train_loss, ep_train_acc, ep_val_loss, ep_val_acc))
 
     def _output_training_stat_dataset(self, val_init_op) -> np.ndarray:
         """Output training statistics"""
@@ -1150,17 +1214,22 @@ class EmbeddingIntentClassifier(Component):
 
                 # batch_b = self._to_sparse_tensor(encoded_all_intents[start_idx:end_idx])
                 batch_b = self._toarray(encoded_all_intents[start_idx:end_idx])
+                # batch_b = encoded_all_intents[start_idx: end_idx]
+                # print(batch_size, batches_per_epoch, i, batch_b.shape)
 
-                all_intents_embed.append(self.session.run(self.intent_embed, feed_dict={self.b_in: batch_b}))
+                all_intents_embed.append(self.session.run(self.intent_embed, feed_dict={self.b_raw: batch_b}))
         else:
             if len(iterator.output_shapes[0]) == 2:
                 shape_X = (len(encoded_all_intents), iterator.output_shapes[0][-1])
+                X_tensor = tf.zeros(shape_X)
             else:
                 shape_X = (len(encoded_all_intents), 1, iterator.output_shapes[0][-1])
+                X_tensor = tf.zeros(shape_X)
 
-            X_tensor = tf.SparseTensor(tf.zeros((0, len(iterator.output_shapes[0])), tf.int64),
-                                       tf.zeros((0,), tf.int32), shape_X)
-            Y_tensor = self._to_sparse_tensor(encoded_all_intents)
+            # X_tensor = tf.SparseTensor(tf.zeros((0, len(iterator.output_shapes[0])), tf.int64),
+            #                            tf.zeros((0,), tf.int32), shape_X)
+            # Y_tensor = self._to_sparse_tensor(encoded_all_intents)
+            Y_tensor = tf.constant(encoded_all_intents, dtype=tf.float32)
 
             all_intents_dataset = tf.data.Dataset.from_tensor_slices((X_tensor, Y_tensor)).batch(batch_size)
             self.session.run(iterator.make_initializer(all_intents_dataset))
@@ -1345,9 +1414,6 @@ class EmbeddingIntentClassifier(Component):
             else:
                 self.test_intent_dict = self.inv_intent_dict
                 intent_target_id = None
-
-
-            # print(intent_target,intent_target_id)
 
             intent_ids, message_sim = self._calculate_message_sim_all(X, intent_target_id)
 

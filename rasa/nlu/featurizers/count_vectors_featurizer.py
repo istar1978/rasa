@@ -427,7 +427,7 @@ class CountVectorsFeaturizer(Featurizer):
 
             if not self.sparse:
                 if not self.sequence:
-                    bag = vect.transform([message_text]).toarray().squeeze()
+                    bag = vect.transform([message_text]).toarray()
                     message.set("text_features",
                                 self._combine_with_existing_text_features(message,
                                                                           bag))
