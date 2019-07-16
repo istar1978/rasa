@@ -337,6 +337,7 @@ def create_model(
     """Creates a classification model."""
 
     if bert_config:
+        print ("CREATING BERT FROM SCRATCH")
 
         model = BertModel(
             config=bert_config,
@@ -350,6 +351,8 @@ def create_model(
         output_layer = model.get_pooled_output()
 
     else:
+        print ("CREATING BERT FROM TF HUB")
+
         bert_module = hub.Module(bert_tfhub_module_handle, trainable=True)
         bert_inputs = dict(
             input_ids=input_ids, input_mask=input_mask, segment_ids=segment_ids

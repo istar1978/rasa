@@ -26,6 +26,8 @@ import re
 import six
 import tensorflow as tf
 
+from tensorflow.contrib.model_pruning.python.layers import layers as pruning_layers
+
 
 class BertConfig(object):
     """Configuration for `BertModel`."""
@@ -932,6 +934,72 @@ def transformer_model(
     else:
         final_output = reshape_from_matrix(prev_output, input_shape)
         return final_output
+
+
+# replacement for tf.layers.dense which supports pruning
+def dense_pruned(
+    x,
+    units,
+    activation=None,
+    use_bias=True,
+    kernel_initializer=None,
+    bias_initializer="zeros",
+    sparsity_technique="weight_pruning",
+    # dtype=tf.float32,
+    name=None,
+    initial_sparsity=None,
+):  # diff
+    """Matmul & bias add that supports broadcasting for batched gemm.
+
+  Supports a contrained set of functionality provided by tf.layers.dense.
+
+  Args:
+    x: input tensor.
+    units: number of units in the dense layer.
+    activation: activation function to use in the layer (default: linear without any activation)
+    use_bias: whether or not to add a bias to the output.
+    kernel_initializer: weight initializer for the layer.
+    bias_initializer: weight initializer for the bias.
+    sparsity_technique: sparsification technique to apply to the weights.
+    name: name for the layer.
+    initial_sparsity: initial weight sparsity at the start of training.
+
+  Returns:
+    Tensor representing the output of the layer.
+  """
+
+    if kernel_initializer is None:
+        kernel_initializer = create_initializer()
+
+    bias_initializer = initializers.get(bias_initializer)
+
+    if sparsity_technique == "weight_pruning":
+        if initial_sparsity is not None:
+            # If the initial sparsity value is passed in, use the sparse glorot
+            # uniform initializer to account for the zero valued weights.
+            kernel_initializer = common_init.SparseGlorotUniform(
+                initial_sparsity, dtype=dtype
+            )
+            tf.logging.info(
+                "Using sparse initialization with sparsity {} for variable {}".format(
+                    initial_sparsity, tf.get_variable_scope().name
+                )
+            )
+
+        # If the sparsity technique is weight_pruning
+        # use the model_pruning masked_fully_connected layer
+        #
+        # masked_fully_connected doesn't take use_bias arg, pass None for the
+        # bias initializer if we don't want a bias variable
+        bias_initializer = bias_initializer if use_bias else None
+        with tf.variable_scope(name, default_name="dense"):
+            return pruning_layers.masked_fully_connected(
+                inputs=x,
+                num_outputs=units,
+                activation_fn=activation,
+                weights_initializer=kernel_initializer,
+                biases_initializer=bias_initializer,
+            )
 
 
 def get_shape_list(tensor, expected_rank=None, name=None):

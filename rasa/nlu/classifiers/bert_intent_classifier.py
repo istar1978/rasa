@@ -210,15 +210,10 @@ class BertIntentClassifier(Component):
             model_dir=self.checkpoint_dir,
         )
 
-        # graph = tf.get_default_graph()
-        # print(g)
-        # print(g.get_collection(tf.GraphKeys.GLOBAL_VARIABLES))
-        # writer = tf.summary.FileWriter(logdir="tfgraph-bert", graph=g)
-        # writer.flush()
-        # exit(0)
-
         # Start training
+        print ("...TRAINING...")
         self.estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
+        print ("...TRAINING FINISHED...")
 
         self.session = tf.Session()
 
@@ -226,6 +221,27 @@ class BertIntentClassifier(Component):
         self.predict_fn = predictor.from_estimator(
             self.estimator, serving_input_fn_builder(self.max_seq_length)
         )
+
+        g = self.predict_fn.graph
+        # print(g)
+        # [print(v.name) for v in g.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
+        writer = tf.summary.FileWriter(logdir="tfgraph-bert", graph=g)
+        writer.flush()
+
+        """
+        Key bert/embeddings/LayerNorm/beta not found in checkpoint
+        [[node save/RestoreV2 (defined at /.miniconda3/envs/rasaenv/lib/python3.7/site-packages/tensorflow_core/python/framework/ops.py:1637) ]]
+
+        Difference: Tom's weights have module/ wrapped around bert/ and these vars are added:
+        cls/predictions/output_bias
+        cls/predictions/transform/dense/bias
+        cls/predictions/transform/dense/kernel
+        cls/predictions/transform/LayerNorm/beta
+        cls/predictions/transform/LayerNorm/gamma
+        global_step
+        """
+
+        # exit(0)
 
     def process(self, message: Message, **kwargs: Any) -> None:
         """Return the most likely intent and its similarity to the input"""
@@ -357,6 +373,11 @@ class BertIntentClassifier(Component):
             with graph.as_default():
                 sess = tf.Session()
                 predict_fn = predictor.from_saved_model(model_path)
+
+                writer = tf.summary.FileWriter(
+                    logdir="tfgraph-bert-hub-test", graph=predict_fn.graph
+                )
+                writer.flush()
 
                 if meta["use_tflite"]:
                     tflite_model_file = "tflite/converted_model_bert.tflite"
