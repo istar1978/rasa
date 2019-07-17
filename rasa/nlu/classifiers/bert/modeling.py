@@ -26,6 +26,9 @@ import re
 import six
 import tensorflow as tf
 
+from tensorflow.keras import activations
+from tensorflow.keras import initializers
+
 from tensorflow.contrib.model_pruning.python.layers import layers as pruning_layers
 
 
@@ -140,6 +143,7 @@ class BertModel(object):
         token_type_ids=None,
         use_one_hot_embeddings=True,
         scope=None,
+        sparsity_technique="weight_pruning",
     ):
         """Constructor for BertModel.
 
@@ -168,6 +172,8 @@ class BertModel(object):
         input_shape = get_shape_list(input_ids, expected_rank=2)
         batch_size = input_shape[0]
         seq_length = input_shape[1]
+
+        self.sparsity_technique = sparsity_technique
 
         if input_mask is None:
             input_mask = tf.ones(shape=[batch_size, seq_length], dtype=tf.int32)
@@ -224,6 +230,7 @@ class BertModel(object):
                     attention_probs_dropout_prob=config.attention_probs_dropout_prob,
                     initializer_range=config.initializer_range,
                     do_return_all_layers=True,
+                    sparsity_technique=self.sparsity_technique,
                 )
 
             self.sequence_output = self.all_encoder_layers[-1]
@@ -236,11 +243,12 @@ class BertModel(object):
                 # We "pool" the model by simply taking the hidden state corresponding
                 # to the first token. We assume that this has been pre-trained
                 first_token_tensor = tf.squeeze(self.sequence_output[:, 0:1, :], axis=1)
-                self.pooled_output = tf.layers.dense(
+                self.pooled_output = dense_pruned(
                     first_token_tensor,
                     config.hidden_size,
                     activation=tf.tanh,
                     kernel_initializer=create_initializer(config.initializer_range),
+                    sparsity_technique=self.sparsity_technique,
                 )
 
     def get_pooled_output(self):
@@ -592,6 +600,7 @@ def attention_layer(
     batch_size=None,
     from_seq_length=None,
     to_seq_length=None,
+    sparsity_technique="weight_pruning",
 ):
     """Performs multi-headed attention from `from_tensor` to `to_tensor`.
 
@@ -690,31 +699,36 @@ def attention_layer(
     from_tensor_2d = reshape_to_matrix(from_tensor)
     to_tensor_2d = reshape_to_matrix(to_tensor)
 
+    # the following corresponds to compute_qkv from t2t
+
     # `query_layer` = [B*F, N*H]
-    query_layer = tf.layers.dense(
+    query_layer = dense_pruned(
         from_tensor_2d,
         num_attention_heads * size_per_head,
         activation=query_act,
         name="query",
         kernel_initializer=create_initializer(initializer_range),
+        sparsity_technique=sparsity_technique,
     )
 
     # `key_layer` = [B*T, N*H]
-    key_layer = tf.layers.dense(
+    key_layer = dense_pruned(
         to_tensor_2d,
         num_attention_heads * size_per_head,
         activation=key_act,
         name="key",
         kernel_initializer=create_initializer(initializer_range),
+        sparsity_technique=sparsity_technique,
     )
 
     # `value_layer` = [B*T, N*H]
-    value_layer = tf.layers.dense(
+    value_layer = dense_pruned(
         to_tensor_2d,
         num_attention_heads * size_per_head,
         activation=value_act,
         name="value",
         kernel_initializer=create_initializer(initializer_range),
+        sparsity_technique=sparsity_technique,
     )
 
     # `query_layer` = [B, N, F, H]
@@ -726,6 +740,8 @@ def attention_layer(
     key_layer = transpose_for_scores(
         key_layer, batch_size, num_attention_heads, to_seq_length, size_per_head
     )
+
+    # the following corresponds to dot_product_attention from t2t
 
     # Take the dot product between "query" and "key" to get the raw
     # attention scores.
@@ -798,6 +814,7 @@ def transformer_model(
     attention_probs_dropout_prob=0.1,
     initializer_range=0.02,
     do_return_all_layers=False,
+    sparsity_technique="weight_pruning",
 ):
     """Multi-headed, multi-layer Transformer from "Attention is All You Need".
 
@@ -882,6 +899,7 @@ def transformer_model(
                         batch_size=batch_size,
                         from_seq_length=seq_length,
                         to_seq_length=seq_length,
+                        sparsity_technique=sparsity_technique,
                     )
                     attention_heads.append(attention_head)
 
@@ -896,29 +914,32 @@ def transformer_model(
                 # Run a linear projection of `hidden_size` then add a residual
                 # with `layer_input`.
                 with tf.variable_scope("output"):
-                    attention_output = tf.layers.dense(
+                    attention_output = dense_pruned(
                         attention_output,
                         hidden_size,
                         kernel_initializer=create_initializer(initializer_range),
+                        sparsity_technique=sparsity_technique,
                     )
                     attention_output = dropout(attention_output, hidden_dropout_prob)
                     attention_output = layer_norm(attention_output + layer_input)
 
             # The activation is only applied to the "intermediate" hidden layer.
             with tf.variable_scope("intermediate"):
-                intermediate_output = tf.layers.dense(
+                intermediate_output = dense_pruned(
                     attention_output,
                     intermediate_size,
                     activation=intermediate_act_fn,
                     kernel_initializer=create_initializer(initializer_range),
+                    sparsity_technique=sparsity_technique,
                 )
 
             # Down-project back to `hidden_size` then add the residual.
             with tf.variable_scope("output"):
-                layer_output = tf.layers.dense(
+                layer_output = dense_pruned(
                     intermediate_output,
                     hidden_size,
                     kernel_initializer=create_initializer(initializer_range),
+                    sparsity_technique=sparsity_technique,
                 )
                 layer_output = dropout(layer_output, hidden_dropout_prob)
                 layer_output = layer_norm(layer_output + attention_output)
@@ -937,18 +958,21 @@ def transformer_model(
 
 
 # replacement for tf.layers.dense which supports pruning
+# NOTE: if weightPruning is used, what is 'kernel' and 'bias' in the graph of tf.layers.dense,
+# becomed 'weights' and 'biases' in the graph of dense_pruned. This originates from
+# tf.contrib.model_pruning.masked_fully_connected
 def dense_pruned(
     x,
     units,
     activation=None,
     use_bias=True,
     kernel_initializer=None,
-    bias_initializer="zeros",
+    bias_initializer=None,
     sparsity_technique="weight_pruning",
-    # dtype=tf.float32,
-    name=None,
+    dtype=tf.float32,
+    name="dense",
     initial_sparsity=None,
-):  # diff
+):
     """Matmul & bias add that supports broadcasting for batched gemm.
 
   Supports a contrained set of functionality provided by tf.layers.dense.
@@ -956,49 +980,62 @@ def dense_pruned(
   Args:
     x: input tensor.
     units: number of units in the dense layer.
-    activation: activation function to use in the layer (default: linear without any activation)
+    activation: callable. activation function to use in the layer (default: linear without any activation)
     use_bias: whether or not to add a bias to the output.
-    kernel_initializer: weight initializer for the layer.
-    bias_initializer: weight initializer for the bias.
+    kernel_initializer: initializer. weight initializer for the layer.
+    bias_initializer: initializer. weight initializer for the bias (default: zeros)
     sparsity_technique: sparsification technique to apply to the weights.
+    dtype: data type for the weights and computation.
     name: name for the layer.
     initial_sparsity: initial weight sparsity at the start of training.
 
   Returns:
     Tensor representing the output of the layer.
   """
+    if sparsity_technique is None:
+        return tf.layers.dense(
+            x,
+            units,
+            activation=activation,
+            use_bias=use_bias,
+            kernel_initializer=kernel_initializer,
+            bias_initializer=bias_initializer,
+            name=name,
+        )
+    elif sparsity_technique == "weight_pruning":
+        if kernel_initializer is None:
+            kernel_initializer = create_initializer()
+        if activation is None:
+            activation = activations.get("linear")
+        if bias_initializer is None:
+            bias_initializer = initializers.get("zeros")
 
-    if kernel_initializer is None:
-        kernel_initializer = create_initializer()
-
-    bias_initializer = initializers.get(bias_initializer)
-
-    if sparsity_technique == "weight_pruning":
-        if initial_sparsity is not None:
-            # If the initial sparsity value is passed in, use the sparse glorot
-            # uniform initializer to account for the zero valued weights.
-            kernel_initializer = common_init.SparseGlorotUniform(
-                initial_sparsity, dtype=dtype
-            )
-            tf.logging.info(
-                "Using sparse initialization with sparsity {} for variable {}".format(
-                    initial_sparsity, tf.get_variable_scope().name
+        if sparsity_technique == "weight_pruning":
+            if initial_sparsity is not None:
+                # If the initial sparsity value is passed in, use the sparse glorot
+                # uniform initializer to account for the zero valued weights.
+                kernel_initializer = common_init.SparseGlorotUniform(
+                    initial_sparsity, dtype=dtype
                 )
-            )
+                tf.logging.info(
+                    "Using sparse initialization with sparsity {} for variable {}".format(
+                        initial_sparsity, tf.get_variable_scope().name
+                    )
+                )
 
-        # If the sparsity technique is weight_pruning
-        # use the model_pruning masked_fully_connected layer
-        #
-        # masked_fully_connected doesn't take use_bias arg, pass None for the
-        # bias initializer if we don't want a bias variable
-        bias_initializer = bias_initializer if use_bias else None
-        with tf.variable_scope(name, default_name="dense"):
+            # If the sparsity technique is weight_pruning
+            # use the model_pruning masked_fully_connected layer
+            #
+            # masked_fully_connected doesn't take use_bias arg, pass None for the
+            # bias initializer if we don't want a bias variable
+            bias_initializer = bias_initializer if use_bias else None
             return pruning_layers.masked_fully_connected(
                 inputs=x,
                 num_outputs=units,
                 activation_fn=activation,
                 weights_initializer=kernel_initializer,
                 biases_initializer=bias_initializer,
+                scope=name,
             )
 
 

@@ -180,6 +180,9 @@ class BertIntentClassifier(Component):
             pickle.dump(calibration_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
         """
 
+        sparsity_technique = "weight_pruning"
+        # sparsity_technique = None
+
         if self.pretrained_model_dir:
             bert_config = BertConfig.from_json_file(
                 os.path.join(self.pretrained_model_dir, "bert_config.json")
@@ -203,35 +206,48 @@ class BertIntentClassifier(Component):
             drop_remainder=True,
         )
 
+        params = {
+            "batch_size": self.batch_size,
+            "sparsity_technique": sparsity_technique,
+            "sparsification_params": {
+                "begin_pruning_step": 0,
+                "end_pruning_step": num_train_steps,
+                "pruning_frequency": 1,
+                "target_sparsity": 0.5,
+            },
+        }
         self.estimator = tf.estimator.Estimator(
             model_fn=model_fn,
             config=run_config,
-            params={"batch_size": self.batch_size},
+            params=params,
             model_dir=self.checkpoint_dir,
+            warm_start_from=(
+                None
+                if sparsity_technique is None
+                else "../bert-pretrained/1558619716/variables-renamed/variables"
+            ),
         )
 
         # Start training
-        print ("...TRAINING...")
         self.estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
-        print ("...TRAINING FINISHED...")
 
         self.session = tf.Session()
 
+        serving_input_receiver_fn = serving_input_fn_builder(self.max_seq_length)
+
         # Create predictor incase running evaluation
         self.predict_fn = predictor.from_estimator(
-            self.estimator, serving_input_fn_builder(self.max_seq_length)
+            self.estimator, serving_input_receiver_fn
         )
 
         g = self.predict_fn.graph
         # print(g)
         # [print(v.name) for v in g.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
-        writer = tf.summary.FileWriter(logdir="tfgraph-bert", graph=g)
+        writer = tf.summary.FileWriter(logdir="tfgraph-bert-pruned", graph=g)
         writer.flush()
+        # exit(0)
 
         """
-        Key bert/embeddings/LayerNorm/beta not found in checkpoint
-        [[node save/RestoreV2 (defined at /.miniconda3/envs/rasaenv/lib/python3.7/site-packages/tensorflow_core/python/framework/ops.py:1637) ]]
-
         Difference: Tom's weights have module/ wrapped around bert/ and these vars are added:
         cls/predictions/output_bias
         cls/predictions/transform/dense/bias
@@ -239,9 +255,13 @@ class BertIntentClassifier(Component):
         cls/predictions/transform/LayerNorm/beta
         cls/predictions/transform/LayerNorm/gamma
         global_step
+
+        Also, as a result of weight pruning, the naming changes like so: kernel->weights and bias->biases
+        Additionally, weight pruning creates weight masks, but no need to worry about those.
         """
 
         # exit(0)
+        print ("EXITING TRAINING")
 
     def process(self, message: Message, **kwargs: Any) -> None:
         """Return the most likely intent and its similarity to the input"""
@@ -290,6 +310,7 @@ class BertIntentClassifier(Component):
             # tflite, no optims:  597s (0.605s/message). micro f1: 0.884, macro f1: 0.921
             # tflite, size:       1961s (1.99s/message). micro f1: 0.880, macro f1: 0.918
             # tflite, latency:    2040s (2.07s/message). micro f1: 0.880, macro f1: 0.918
+            # weight pruned:      241s (0.244s/message).
         else:
             result = self.predict_fn(
                 {
@@ -375,7 +396,7 @@ class BertIntentClassifier(Component):
                 predict_fn = predictor.from_saved_model(model_path)
 
                 writer = tf.summary.FileWriter(
-                    logdir="tfgraph-bert-hub-test", graph=predict_fn.graph
+                    logdir="tfgraph-bert-pruned-test", graph=predict_fn.graph
                 )
                 writer.flush()
 

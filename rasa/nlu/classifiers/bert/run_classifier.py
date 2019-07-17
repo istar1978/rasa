@@ -25,6 +25,7 @@ from rasa.nlu.classifiers.bert.modeling import BertModel
 
 import tensorflow as tf
 import tensorflow_hub as hub
+from tensorflow.contrib.model_pruning.python import pruning as magnitude_pruning
 
 
 class InputExample(object):
@@ -226,6 +227,46 @@ def create_examples(rasa_training_examples, set_type):
 #
 
 
+def check_global_sparsity():
+    """Add a summary for the weight sparsity."""
+    weight_masks = magnitude_pruning.get_masks()
+    weights_per_layer = []
+    nonzero_per_layer = []
+    for mask in weight_masks:
+        nonzero_per_layer.append(tf.reduce_sum(mask))
+        weights_per_layer.append(tf.size(mask))
+        total_nonzero = tf.add_n(nonzero_per_layer)
+        total_weights = tf.add_n(weights_per_layer)
+    sparsity = 1.0 - (
+        tf.cast(total_nonzero, tf.float32) / tf.cast(total_weights, tf.float32)
+    )
+    tf.summary.scalar("global_weight_sparsity", sparsity)
+
+
+def pruning_hparams(hparams):  # pylint: disable=unused-argument
+    """Helper to get hparams for pruning library."""
+    hparams = tf.contrib.training.HParams(
+        begin_pruning_step=hparams.get("begin_pruning_step"),
+        end_pruning_step=hparams.get("end_pruning_step"),
+        pruning_frequency=hparams.get("pruning_frequency"),
+        target_sparsity=hparams.get("target_sparsity"),
+        sparsity_function_begin_step=hparams.get("begin_pruning_step"),
+        sparsity_function_end_step=hparams.get("end_pruning_step"),
+        # nbins=hparams.get("nbins"),
+        weight_sparsity_map=[""],
+        name="model_pruning",
+        threshold_decay=0.0,
+        initial_sparsity=0.0,
+        sparsity_function_exponent=1,
+        use_tpu=False,
+        block_height=1,
+        block_width=1,
+        block_pooling_function="AVG",
+    )
+
+    return hparams
+
+
 def model_fn_builder(
     bert_tfhub_module_handle,
     num_labels,
@@ -256,6 +297,7 @@ def model_fn_builder(
                 num_labels,
                 bert_tfhub_module_handle,
                 bert_config,
+                sparsity_technique=params["sparsity_technique"],
             )
 
             train_op = create_optimizer(
@@ -293,6 +335,28 @@ def model_fn_builder(
             eval_metrics = metric_fn(label_ids, predicted_labels)
 
             if mode == tf.estimator.ModeKeys.TRAIN:
+                if params["sparsity_technique"] == "weight_pruning":
+                    if not "load_masks_from" in params:
+                        # If we are loading trained masks, don't add the mask update
+                        # step to the training process and keep the masks static
+                        with tf.control_dependencies([train_op]):
+                            mp_hparams = pruning_hparams(
+                                params["sparsification_params"]
+                            )
+                            p = magnitude_pruning.Pruning(
+                                mp_hparams, global_step=tf.train.get_global_step()
+                            )
+                            mask_update_op = p.conditional_mask_update_op()
+                            train_op = mask_update_op
+                    check_global_sparsity()
+
+                    # if self._hparams.warm_start_from:
+                    #     self.initialize_from_ckpt(
+                    #         self._hparams.warm_start_from)
+                    #   elif self._hparams.load_masks_from:
+                    #     self.initialize_masks_from_ckpt(
+                    #         self._hparams.load_masks_from)
+
                 return tf.estimator.EstimatorSpec(
                     mode=mode,
                     loss=loss,
@@ -314,6 +378,7 @@ def model_fn_builder(
                 num_labels,
                 bert_tfhub_module_handle,
                 bert_config,
+                sparsity_technique=params["sparsity_technique"],
             )
 
             predictions = {"probabilities": log_probs}
@@ -333,12 +398,10 @@ def create_model(
     bert_tfhub_module_handle=None,
     bert_config=None,
     use_one_hot_embeddings=True,
+    sparsity_technique="weight_pruning",
 ):
     """Creates a classification model."""
-
     if bert_config:
-        print ("CREATING BERT FROM SCRATCH")
-
         model = BertModel(
             config=bert_config,
             is_training=not is_predicting,
@@ -346,12 +409,18 @@ def create_model(
             input_mask=input_mask,
             token_type_ids=segment_ids,
             use_one_hot_embeddings=use_one_hot_embeddings,
+            sparsity_technique=sparsity_technique,
         )
 
         output_layer = model.get_pooled_output()
 
     else:
-        print ("CREATING BERT FROM TF HUB")
+        if sparsity_technique is not None:
+            raise ValueError(
+                "Trying to use sparsity technique '{}' with a model from TF Hub is not supported.".format(
+                    sparsity_technique
+                )
+            )
 
         bert_module = hub.Module(bert_tfhub_module_handle, trainable=True)
         bert_inputs = dict(
