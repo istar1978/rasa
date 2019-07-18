@@ -86,8 +86,8 @@ class EmbeddingIntentClassifier(Component):
         "layer_norm": True,
         # initial and final batch sizes - batch size will be
         # linearly increased for each epoch
-        # "batch_size": [64, 128],
-        "batch_size": 64,
+        "batch_size": [64, 128],
+        # "batch_size": 64,
         "stratified_batch": True,
         # number of epochs
         "epochs": 300,
@@ -878,8 +878,8 @@ class EmbeddingIntentClassifier(Component):
         self.graph = tf.Graph()
         with self.graph.as_default():
             # set random seed
-            batch_size_in, is_training, iterator, loss, train_init_op, train_op, val_init_op = self.build_train_graph(X,
-                                                                                                                      Y, intents_for_X)
+            batch_size_in, is_training, iterator, loss, train_init_op, train_op, val_init_op = \
+                self.build_train_graph(X,Y,intents_for_X)
             self.session = tf.Session()
 
             self._train_tf_dataset(train_init_op, val_init_op, batch_size_in, loss, is_training, train_op, tb_sum_dir)
@@ -888,53 +888,66 @@ class EmbeddingIntentClassifier(Component):
 
             self.build_pred_graph(is_training)
 
-    def build_pred_graph(self, is_training):
-        # prediction graph
-        self.all_intents_embed_in = tf.placeholder(tf.float32, (None, None, self.embed_dim),
-                                                   name='all_intents_embed')
-        self.a_in = tf.placeholder(self.a_raw.dtype, self.a_raw.shape, name='a')
-        self.b_in = tf.placeholder(self.b_raw.dtype, self.b_raw.shape, name='b')
-        if not self.gpu_lstm:
-            self.word_embed = self._create_tf_embed_a(self.a_in, is_training)
-            self.intent_embed = self._create_tf_embed_b(self.b_in, is_training)
 
-            tiled_intent_embed = self._tf_sample_neg(self.intent_embed, is_training, None, tf.shape(self.word_embed)[0])
+    def get_tf_datasets(self, X, Y, dpt_shapes, dpt_types, intents_for_X, batch_size_pl):
 
-            self.sim_op, _, _ = self._tf_sim(self.word_embed, tiled_intent_embed)
+        if self.evaluate_on_num_examples:
 
-            self.sim_all, _, _ = self._tf_sim(self.word_embed, self.all_intents_embed_in)
+            X_train, X_val, Y_train, Y_val, X_train_intents, X_val_intents = self.train_val_split(X, Y, intents_for_X)
 
-    # def gen_next_batch(self, X, Y, intents_for_X, batch_size):
-    #
-    #     def gen_random_batch(X, Y, batch_size):
-    #
-    #         while True:
-    #             batch_ids = np.random.choice(X.shape[0], batch_size)[0]
-    #
-    #             batch_x = X[batch_ids]
-    #             batch_y = Y[batch_ids]
-    #
-    #             yield batch_x, batch_y
-    #             # yield self._to_sparse_tensor(batch_x), self._to_sparse_tensor(batch_y)
-    #
-    #     def gen_stratified_batch(X, Y, intents_for_X, batch_size):
-    #
-    #         num_batches = X.shape[0] // batch_size
-    #         batch_ex_per_intent = batch_size//len(set(intents_for_X))
-    #
-    #         df = pd.DataFrame(dict(X=X,Y=Y,labels=intents_for_X))
-    #
-    #         for index in range(num_batches):
-    #
-    #             sampled_df = df.groupby('labels', group_keys=False).apply(lambda x: x.sample(min(X.shape[0], batch_ex_per_intent)))
-    #
-    #             batch_x = sampled_df['X'].tolist()
-    #             batch_y = sampled_df['Y'].tolist()
-    #
-    #             # yield self._to_sparse_tensor(np.array(batch_x)), self._to_sparse_tensor(np.array(batch_y))
-    #             yield np.array(batch_x), np.array(batch_y)
-    #
-    #     return lambda: gen_random_batch(X,Y,batch_size) if not self.stratified_batch else gen_stratified_batch(X,Y,intents_for_X,batch_size)
+            train_tf_dataset = None
+
+            if self.stratified_batch:
+
+                if isinstance(self.batch_size, list):
+                    train_gen_func = lambda x: self.gen_stratified_batch(X_train, Y_train, X_train_intents, x)
+                    train_tf_dataset = self.create_tf_generator_dataset(train_gen_func, dpt_shapes=dpt_shapes,
+                                                                        dpt_types=dpt_types, args=([batch_size_pl]))
+                else:
+                    train_gen_func = lambda: self.gen_stratified_batch(X_train, Y_train, X_train_intents, self.batch_size)
+                    train_tf_dataset = self.create_tf_generator_dataset(train_gen_func, dpt_shapes=dpt_shapes,
+                                                                        dpt_types=dpt_types, args=([]))
+
+            else:
+                if isinstance(self.batch_size, list):
+                    train_gen_func = lambda x: self.gen_sequence_batch(X_train, Y_train, x)
+                    train_tf_dataset = self.create_tf_generator_dataset(train_gen_func, dpt_shapes=dpt_shapes,
+                                                                        dpt_types=dpt_types, args=([batch_size_pl]))
+                else:
+                    train_gen_func = lambda: self.gen_sequence_batch(X_train, Y_train, self.batch_size)
+                    train_tf_dataset = self.create_tf_generator_dataset(train_gen_func, dpt_shapes=dpt_shapes,
+                                                                        dpt_types=dpt_types, args=([]))
+
+            val_gen_func = lambda : self.gen_sequence_batch(X_val,Y_val,self.validation_bs)
+
+            val_tf_dataset = self.create_tf_generator_dataset(val_gen_func, dpt_shapes=dpt_shapes, dpt_types=dpt_types,
+                                                              args=[])
+
+            return train_tf_dataset, val_tf_dataset
+
+        else:
+
+            train_gen_func = None
+
+            if self.stratified_batch:
+                if isinstance(self.batch_size, list):
+                    train_gen_func = lambda x: self.gen_stratified_batch(X_train, Y_train, X_train_intents, x)
+                else:
+                    train_gen_func = lambda: self.gen_stratified_batch(X_train, Y_train, X_train_intents, self.batch_size)
+
+
+            else:
+                if isinstance(self.batch_size, list):
+                    train_gen_func = lambda x: self.gen_sequence_batch(X_train, Y_train, x)
+                else:
+                    train_gen_func = lambda: self.gen_sequence_batch(X_train, Y_train, self.batch_size)
+
+            train_tf_dataset = self.create_tf_generator_dataset(train_gen_func, dpt_shapes=dpt_shapes,
+                                                                dpt_types=dpt_types, args=([]))
+
+
+
+            return train_tf_dataset, None
 
 
     def gen_random_batch(self, X, Y, batch_size):
@@ -955,6 +968,7 @@ class EmbeddingIntentClassifier(Component):
         num_batches = X.shape[0] // batch_size + int(X.shape[0] % batch_size > 0)
         batch_ex_per_intent = max(batch_size//len(set(intents_for_X)), 1)
 
+        # print(X.shape,Y.shape,intents_for_X.shape)
         df = pd.DataFrame({'X': X.tolist(), 'Y': Y.tolist(), 'labels': intents_for_X.tolist()})
 
         for batch_idx in range(num_batches):
@@ -981,37 +995,18 @@ class EmbeddingIntentClassifier(Component):
             yield np.array(batch_x), np.array(batch_y)
 
 
-    def get_train_valid_init_op(self, X, Y, intents_for_X, **kwargs):
+    def create_tf_generator_dataset(self, gen_func, dpt_types, dpt_shapes, args):
 
-        train_gen_params = []
-        if 'train_params' in kwargs:
-            train_gen_params = kwargs['train_params']
+        return tf.data.Dataset.from_generator(gen_func, output_types=dpt_types, output_shapes=dpt_shapes, args=args)
 
-        if self.evaluate_on_num_examples:
 
-            X_train, X_val, Y_train, Y_val, X_train_intents, X_val_intents = train_test_split(X,Y,intents_for_X,test_size=self.evaluate_on_num_examples,stratify=intents_for_X)
+    def get_train_valid_init_op(self, X, Y, intents_for_X, batch_size_in):
 
-            train_dpt_types = (tf.float32, tf.float32)
+        dpt_types = (tf.float32, tf.float32)
 
-            train_dpt_shapes = ([None, X_train[0].shape[-1]], [None, Y_train[0].shape[-1]])
+        dpt_shapes = ([None, X[0].shape[-1]], [None, Y[0].shape[-1]])
 
-            # print(X_train.shape,X_val.shape,Y_train.shape, Y_val.shape)
-
-            gen_func = lambda : self.gen_stratified_batch(X_train, Y_train, X_train_intents, self.batch_size) if \
-                self.stratified_batch else self.gen_sequence_batch(X_train, Y_train, self.batch_size)
-
-            train_dataset = tf.data.Dataset.from_generator(gen_func,
-                                                           output_types=train_dpt_types, output_shapes=train_dpt_shapes)
-
-            val_dataset = tf.data.Dataset.from_generator(lambda: self.gen_sequence_batch(X_val, Y_val, self.validation_bs),
-                                                           output_types=train_dpt_types, output_shapes=train_dpt_shapes)
-
-        else:
-
-            train_dpt_types = (tf.float32, tf.float32)
-            train_dataset = tf.data.Dataset.from_generator(
-                lambda x: self.gen_stratified_batch(X, Y, intents_for_X, x),
-                output_types=train_dpt_types, args=([train_gen_params]))
+        train_dataset, val_dataset = self.get_tf_datasets(X, Y, dpt_shapes, dpt_types, intents_for_X, batch_size_in)
 
         # create general iterator
         iterator = tf.data.Iterator.from_structure(train_dataset.output_types, train_dataset.output_shapes)
@@ -1026,20 +1021,80 @@ class EmbeddingIntentClassifier(Component):
         else:
             return batch, training_init_op, None, iterator
 
+    def train_val_split(self, X, Y, intents_for_X):
+
+        X_train, X_val, Y_train, Y_val, X_train_intents, X_val_intents = train_test_split(X, Y, intents_for_X,
+                                                                                          test_size=self.evaluate_on_num_examples,
+                                                                                          stratify=intents_for_X)
+        return X_train, X_val, Y_train, Y_val, X_train_intents, X_val_intents
+
+    # def _tf_get_negs(self,
+    #                  all_embed: 'tf.Tensor',
+    #                  all_raw: 'tf.Tensor',
+    #                  raw_pos: 'tf.Tensor') -> Tuple['tf.Tensor', 'tf.Tensor']:
+    #     """Get negative examples from given tensor."""
+    #
+    #     batch_size = tf.shape(raw_pos)[0]
+    #     raw_flat = self._tf_make_flat(raw_pos)
+    #
+    #     neg_ids = tf.random.categorical(tf.log(tf.ones((batch_size,tf.shape(all_raw)[0]))),
+    #                                     self.num_neg)
+    #
+    #     bad_negs_flat = self._tf_calc_iou_mask(raw_flat, all_raw, neg_ids)
+    #     bad_negs = tf.reshape(bad_negs_flat, (batch_size, seq_length, -1))
+    #
+    #     neg_embed_flat = self._tf_sample_neg(batch_size * seq_length,
+    #                                          all_embed, neg_ids)
+    #     neg_embed = tf.reshape(neg_embed_flat,
+    #                            (batch_size, seq_length, -1, all_embed.shape[-1]))
+    #
+    #     return neg_embed, bad_negs
+    #
+    # def _tf_make_flat(self, x: 'tf.Tensor') -> 'tf.Tensor':
+    #     """Make tensor 2D."""
+    #
+    #     return tf.reshape(x, (-1, x.shape[-1]))
+    #
+    # def _sample_negatives(self, all_intents: 'tf.Tensor') -> Tuple['tf.Tensor',
+    #                                                                'tf.Tensor',
+    #                                                                'tf.Tensor',
+    #                                                                'tf.Tensor',
+    #                                                                'tf.Tensor',
+    #                                                                'tf.Tensor']:
+    #     """Sample negative intents."""
+    #
+    #     pos_word_embed = tf.expand_dims(self.word_embed, -2)
+    #     neg_word_embed, word_bad_negs = self._tf_get_negs(
+    #         self._tf_make_flat(self.word_embed),
+    #         self._tf_make_flat(self.b_raw),
+    #         self.b_raw
+    #     )
+    #     pos_bot_embed = tf.expand_dims(self.bot_embed, -2)
+    #     neg_bot_embed, bot_bad_negs = self._tf_get_negs(
+    #         self.all_bot_embed,
+    #         all_actions,
+    #         self.b_in
+    #     )
+    #     return (pos_dial_embed, pos_bot_embed, neg_dial_embed, neg_bot_embed,
+    #             dial_bad_negs, bot_bad_negs)
+
     def build_train_graph(self, X, Y, intents_for_X):
+
         np.random.seed(self.random_seed)
         tf.set_random_seed(self.random_seed)
 
-        batch_size_in = tf.placeholder(tf.int64)
-        (self.a_raw, self.b_raw), train_init_op, val_init_op, iterator = self.get_train_valid_init_op(X, Y, intents_for_X, kwargs={'train_params': batch_size_in})
-
-        # print(self.a_raw,self.b_raw)
-        # print(a_sparse,b_sparse)
-        # self.a_raw = self._sparse_tensor_to_dense(a_sparse, X[0].shape[-1])
-        # self.b_raw = self._sparse_tensor_to_dense(b_sparse, Y[0].shape[-1])
+        batch_size_in = tf.placeholder(shape=(),dtype=tf.int64)
         is_training = tf.placeholder_with_default(False, shape=())
+
+        (self.a_raw, self.b_raw), train_init_op, val_init_op, iterator = self.get_train_valid_init_op(X, Y, intents_for_X, batch_size_in)
+
+        # all_encoded_intents = tf.Constant(self.encoded_all_intents, dtype= tf.float32, name="all_intents")
+
         self.word_embed = self._create_tf_embed_a(self.a_raw, is_training)
         self.intent_embed = self._create_tf_embed_b(self.b_raw, is_training)
+
+        # self.all_embedded_intents = self._create_tf_embed_b(all_encoded_intents,is_training)
+
         self.neg_ids = tf.random.categorical(tf.log(1. - tf.eye(tf.shape(self.b_raw)[0])), self.num_neg)
         iou_intent = self._tf_calc_iou(self.b_raw, is_training, self.neg_ids)
         self.bad_negs = 1. - tf.nn.relu(tf.sign(self.iou_threshold - iou_intent))
@@ -1062,6 +1117,22 @@ class EmbeddingIntentClassifier(Component):
 
         self.summary_merged_op = tf.summary.merge_all()
         return batch_size_in, is_training, iterator, loss, train_init_op, train_op, val_init_op
+
+    def build_pred_graph(self, is_training):
+        # prediction graph
+        self.all_intents_embed_in = tf.placeholder(tf.float32, (None, None, self.embed_dim),
+                                                   name='all_intents_embed')
+        self.a_in = tf.placeholder(self.a_raw.dtype, self.a_raw.shape, name='a')
+        self.b_in = tf.placeholder(self.b_raw.dtype, self.b_raw.shape, name='b')
+        if not self.gpu_lstm:
+            self.word_embed = self._create_tf_embed_a(self.a_in, is_training)
+            self.intent_embed = self._create_tf_embed_b(self.b_in, is_training)
+
+            tiled_intent_embed = self._tf_sample_neg(self.intent_embed, is_training, None, tf.shape(self.word_embed)[0])
+
+            self.sim_op, _, _ = self._tf_sim(self.word_embed, tiled_intent_embed)
+
+            self.sim_all, _, _ = self._tf_sim(self.word_embed, self.all_intents_embed_in)
 
     def _train_tf_dataset(self,
                           train_init_op,
@@ -1112,7 +1183,7 @@ class EmbeddingIntentClassifier(Component):
                                                                         train_op, loss, self.acc_op,
                                                                         self.summary_merged_op)
 
-                    return_vals = self.session.run(fetch_list, feed_dict={is_training: True})
+                    return_vals = self.session.run(fetch_list, feed_dict={is_training: True, batch_size_in: batch_size})
 
                     # for i in range(11):
                     #     print(return_vals[i].shape)
@@ -1122,8 +1193,6 @@ class EmbeddingIntentClassifier(Component):
 
                     batch_loss = return_vals[-3]
                     batch_acc = return_vals[-2]
-
-                    # print('Acc', batch_acc)
 
                     train_tb_writer.add_summary(return_vals[-1], iter_num)
 

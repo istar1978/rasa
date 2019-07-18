@@ -84,8 +84,8 @@ class ResponseSelector(EmbeddingIntentClassifier):
         "layer_norm": True,
         # initial and final batch sizes - batch size will be
         # linearly increased for each epoch
-        # "batch_size": [64, 128],
-        "batch_size": 64,
+        "batch_size": [64, 128],
+        # "batch_size": 64,
         "stratified_batch": True,
         # number of epochs
         "epochs": 300,
