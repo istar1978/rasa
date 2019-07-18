@@ -55,7 +55,14 @@ class BertIntentClassifier(Component):
         "pretrained_model_dir": None,
         "checkpoint_dir": "./tmp/bert",
         "checkpoint_remove_before_training": True,
+        "warm_start_checkpoint": None,
+        "hat_layer_in_checkpoint": False,
         "use_tflite": False,
+        "sparsity_technique": None,
+        "target_sparsity": 0.5,
+        "begin_pruning_epoch": 0,
+        "end_pruning_epoch": 2,
+        "pruning_frequency_steps": 1,
     }
 
     def _load_bert_params(self, config: Dict[Text, Any]) -> None:
@@ -78,6 +85,28 @@ class BertIntentClassifier(Component):
                     "Loading pretrained model from {}".format(self.pretrained_model_dir)
                 )
 
+    def _load_sparsification_params(self, config: Dict[Text, Any]) -> None:
+        self.sparsity_technique = config["sparsity_technique"]
+        self.target_sparsity = config["target_sparsity"]
+        self.begin_pruning_epoch = config["begin_pruning_epoch"]
+        self.end_pruning_epoch = config["end_pruning_epoch"]
+        if self.begin_pruning_epoch > self.epochs:
+            logger.warning(
+                "'begin_pruning_epoch' must be < 'epochs', setting it to epochs-1."
+            )
+            self.begin_pruning_epoch = max(0, self.epochs - 1)
+        if (
+            self.end_pruning_epoch > self.epochs
+            or self.end_pruning_epoch <= self.begin_pruning_epoch
+        ):
+            logger.warning(
+                "'end_pruning_epoch' must be <= 'epochs' and > 'begin_pruning_epoch', setting it to highest possible correct value"
+            )
+            self.end_pruning_epoch = min(
+                self.epochs, max(self.end_pruning_epoch, self.begin_pruning_epoch)
+            )
+        self.pruning_frequency_steps = config["pruning_frequency_steps"]
+
     def _load_train_params(self, config: Dict[Text, Any]) -> None:
         self.batch_size = config["batch_size"]
         self.epochs = config["epochs"]
@@ -90,10 +119,13 @@ class BertIntentClassifier(Component):
         self.checkpoint_remove_before_training = config[
             "checkpoint_remove_before_training"
         ]
+        self.warm_start_checkpoint = config["warm_start_checkpoint"]
+        self.hat_layer_in_checkpoint = config["hat_layer_in_checkpoint"]
 
     def _load_params(self) -> None:
         self._load_bert_params(self.component_config)
         self._load_train_params(self.component_config)
+        self._load_sparsification_params(self.component_config)
 
     def __init__(
         self,
@@ -150,8 +182,10 @@ class BertIntentClassifier(Component):
 
         train_examples = get_train_examples(training_data.training_examples)
         num_train_steps = int(len(train_examples) / self.batch_size * self.epochs)
+        train_steps_per_epoch = int(len(train_examples) / self.batch_size)
         if self.epochs <= 0:
             num_train_steps = 1
+
         num_warmup_steps = int(num_train_steps * self.warmup_proportion)
 
         tf.logging.info("***** Running training *****")
@@ -180,9 +214,6 @@ class BertIntentClassifier(Component):
             pickle.dump(calibration_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
         """
 
-        sparsity_technique = "weight_pruning"
-        # sparsity_technique = None
-
         if self.pretrained_model_dir:
             bert_config = BertConfig.from_json_file(
                 os.path.join(self.pretrained_model_dir, "bert_config.json")
@@ -206,26 +237,42 @@ class BertIntentClassifier(Component):
             drop_remainder=True,
         )
 
+        begin_pruning_step = train_steps_per_epoch * self.begin_pruning_epoch
+        end_pruning_step = max(
+            train_steps_per_epoch * self.end_pruning_epoch, begin_pruning_step + 1
+        )
+        print (
+            "Begin pruning: {}, end: {}".format(begin_pruning_step, end_pruning_step)
+        )
+
         params = {
             "batch_size": self.batch_size,
-            "sparsity_technique": sparsity_technique,
+            "sparsity_technique": self.sparsity_technique,
             "sparsification_params": {
-                "begin_pruning_step": 0,
-                "end_pruning_step": num_train_steps,
-                "pruning_frequency": 1,
-                "target_sparsity": 0.5,
+                "begin_pruning_step": begin_pruning_step,
+                "end_pruning_step": end_pruning_step,
+                "pruning_frequency": self.pruning_frequency_steps,
+                "target_sparsity": self.target_sparsity,
             },
         }
+
+        warm_start_settings = None
+        if self.warm_start_checkpoint:
+            if self.hat_layer_in_checkpoint:
+                warm_start_settings = tf.estimator.WarmStartSettings(
+                    self.warm_start_checkpoint
+                )
+            else:
+                warm_start_settings = tf.estimator.WarmStartSettings(
+                    self.warm_start_checkpoint, vars_to_warm_start="bert.*"
+                )
+
         self.estimator = tf.estimator.Estimator(
             model_fn=model_fn,
             config=run_config,
             params=params,
             model_dir=self.checkpoint_dir,
-            warm_start_from=(
-                None
-                if sparsity_technique is None
-                else "../bert-pretrained/1558619716/variables-renamed/variables"
-            ),
+            warm_start_from=warm_start_settings,
         )
 
         # Start training
@@ -241,11 +288,8 @@ class BertIntentClassifier(Component):
         )
 
         g = self.predict_fn.graph
-        # print(g)
-        # [print(v.name) for v in g.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
         writer = tf.summary.FileWriter(logdir="tfgraph-bert-pruned", graph=g)
         writer.flush()
-        # exit(0)
 
         """
         Difference: Tom's weights have module/ wrapped around bert/ and these vars are added:
@@ -260,9 +304,6 @@ class BertIntentClassifier(Component):
         Additionally, weight pruning creates weight masks, but no need to worry about those.
         """
 
-        # exit(0)
-        print ("EXITING TRAINING")
-
     def process(self, message: Message, **kwargs: Any) -> None:
         """Return the most likely intent and its similarity to the input"""
 
@@ -276,7 +317,7 @@ class BertIntentClassifier(Component):
         # Get first index since we are only classifying text blob at a time.
         example = predict_features[0]
 
-        start = time.time()
+        # start = time.time()
         if self.use_tflite:
             input_ids = (
                 np.array(example.input_ids)
@@ -327,7 +368,7 @@ class BertIntentClassifier(Component):
                 }
             )
             probabilities = list(np.exp(result["probabilities"])[0])
-        print ("inference time: {:.3f}".format(time.time() - start))
+        # print ("inference time: {:.3f}".format(time.time() - start))
 
         index = np.argmax(probabilities)
         label = self.label_list[index]

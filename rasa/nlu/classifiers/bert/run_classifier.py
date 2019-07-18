@@ -413,7 +413,7 @@ def create_model(
         )
 
         output_layer = model.get_pooled_output()
-
+        output_layer = tf.stop_gradient(output_layer, name="freeze_pretrained")
     else:
         if sparsity_technique is not None:
             raise ValueError(
