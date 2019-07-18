@@ -295,6 +295,7 @@ def plot_intent_confidences(
 def evaluate_intents(
     intent_results: List[IntentEvaluationResult],
     report_folder: Optional[Text],
+    report_filename: Optional[Text] ,
     successes_filename: Optional[Text],
     errors_filename: Optional[Text],
     confmat_filename: Optional[Text],
@@ -326,7 +327,7 @@ def evaluate_intents(
             targets, predictions, prediction_rankings, output_dict=True
         )
 
-        report_filename = os.path.join(report_folder, "intent_report.json")
+        report_filename = os.path.join(report_folder, report_filename)
 
         utils.write_json_to_file(report_filename, report)
         logger.info("Classification report saved to {}.".format(report_filename))
@@ -615,7 +616,7 @@ def align_all_entity_predictions(
 def get_eval_data(
     interpreter: Interpreter, test_data: TrainingData
 ) -> Tuple[
-    List[IntentEvaluationResult], List[EntityEvaluationResult]
+    List[IntentEvaluationResult], List[IntentEvaluationResult], List[EntityEvaluationResult]
 ]:  # pragma: no cover
     """Runs the model for the test set and extracts targets and predictions.
 
@@ -775,13 +776,13 @@ def run_evaluation(
     if intent_results:
         logger.info("Intent evaluation results:")
         result["intent_evaluation"] = evaluate_intents(
-            intent_results, report, successes, errors, confmat, histogram
+            intent_results, report, 'intent_results.json', 'intent_' + successes, 'intent_' + errors, confmat, histogram
         )
 
     if response_results:
         logger.info("Response evaluation results:")
         result["response_evaluation"] = evaluate_intents(
-            response_results, report, successes, errors, confmat, histogram
+            response_results, report, 'response_results.json','response_' + successes, 'response_' + errors, confmat, histogram
         )
 
     if entity_results:
@@ -837,6 +838,7 @@ def combine_result(
 
     (
         intent_current_metrics,
+        response_current_metrics,
         entity_current_metrics,
         current_intent_results,
         current_entity_results,
@@ -951,6 +953,7 @@ def compute_metrics(
     interpreter: Interpreter, corpus: TrainingData
 ) -> Tuple[
     IntentMetrics,
+    IntentMetrics,
     EntityMetrics,
     List[IntentEvaluationResult],
     List[EntityEvaluationResult],
@@ -959,14 +962,16 @@ def compute_metrics(
     Returns intent and entity metrics, and prediction results.
     """
 
-    intent_results, entity_results = get_eval_data(interpreter, corpus)
+    intent_results, response_results, entity_results = get_eval_data(interpreter, corpus)
 
     intent_results = remove_empty_intent_examples(intent_results)
+    response_results = remove_empty_intent_examples(response_results)
 
     intent_metrics = _compute_intent_metrics(intent_results)
+    response_metrics = _compute_intent_metrics(response_results)
     entity_metrics = _compute_entity_metrics(entity_results, interpreter)
 
-    return (intent_metrics, entity_metrics, intent_results, entity_results)
+    return (intent_metrics, response_metrics, entity_metrics, intent_results, entity_results)
 
 
 def compare_nlu(

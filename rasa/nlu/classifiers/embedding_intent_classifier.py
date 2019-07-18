@@ -17,6 +17,7 @@ from rasa.nlu.components import Component
 from rasa.utils.common import is_logging_disabled
 from sklearn.model_selection import train_test_split
 import pandas as pd
+from random import shuffle
 
 logger = logging.getLogger(__name__)
 
@@ -935,10 +936,23 @@ class EmbeddingIntentClassifier(Component):
     #
     #     return lambda: gen_random_batch(X,Y,batch_size) if not self.stratified_batch else gen_stratified_batch(X,Y,intents_for_X,batch_size)
 
+
+    def gen_random_batch(self, X, Y, batch_size):
+
+        num_batches = X.shape[0] // batch_size + int(X.shape[0] % batch_size > 0)
+        ind = np.random.choice(np.arange(0, X.shape[0]),size=(num_batches, batch_size))
+        for batch_num in range(num_batches):
+
+            batch_ind = ind[batch_num]
+            batch_x = X[batch_ind]
+            batch_y = Y[batch_ind]
+
+            yield np.array(batch_x), np.array(batch_y)
+
+
     def gen_stratified_batch(self, X, Y, intents_for_X, batch_size):
 
-
-        num_batches = X.shape[0] // batch_size
+        num_batches = X.shape[0] // batch_size + int(X.shape[0] % batch_size > 0)
         batch_ex_per_intent = max(batch_size//len(set(intents_for_X)), 1)
 
         df = pd.DataFrame({'X': X.tolist(), 'Y': Y.tolist(), 'labels': intents_for_X.tolist()})
@@ -949,8 +963,21 @@ class EmbeddingIntentClassifier(Component):
             batch_x = sampled_df['X'].tolist()
             batch_y = sampled_df['Y'].tolist()
 
+            yield np.array(batch_x), np.array(batch_y)
 
-            # yield self._to_sparse_tensor(np.array(batch_x)), self._to_sparse_tensor(np.array(batch_y))
+    def gen_sequence_batch(self, X, Y, batch_size):
+
+        ids = np.arange(0,X.shape[0])
+        X = X[ids]
+        Y = Y[ids]
+
+        num_batches = X.shape[0] // batch_size + int(X.shape[0] % batch_size > 0)
+
+        for batch_num in range(num_batches):
+
+            batch_x = X[batch_num * batch_size : (batch_num+1) * batch_size]
+            batch_y = Y[batch_num * batch_size : (batch_num+1) * batch_size]
+
             yield np.array(batch_x), np.array(batch_y)
 
 
@@ -970,11 +997,14 @@ class EmbeddingIntentClassifier(Component):
 
             # print(X_train.shape,X_val.shape,Y_train.shape, Y_val.shape)
 
-            train_dataset = tf.data.Dataset.from_generator(lambda: self.gen_stratified_batch(X_train, Y_train, X_train_intents, self.batch_size),
+            gen_func = lambda : self.gen_stratified_batch(X_train, Y_train, X_train_intents, self.batch_size) if \
+                self.stratified_batch else self.gen_sequence_batch(X_train, Y_train, self.batch_size)
+
+            train_dataset = tf.data.Dataset.from_generator(gen_func,
                                                            output_types=train_dpt_types, output_shapes=train_dpt_shapes)
 
-            val_dataset = tf.data.Dataset.from_generator(lambda: self.gen_stratified_batch(X_val, Y_val, X_val_intents,self.validation_bs),
-                                                           output_types=train_dpt_types, output_shapes = train_dpt_shapes)
+            val_dataset = tf.data.Dataset.from_generator(lambda: self.gen_sequence_batch(X_val, Y_val, self.validation_bs),
+                                                           output_types=train_dpt_types, output_shapes=train_dpt_shapes)
 
         else:
 
