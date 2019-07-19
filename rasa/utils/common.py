@@ -112,7 +112,7 @@ def update_tensorflow_log_level():
         tf_log_level = tf.logging.ERROR
 
     tf.logging.set_verbosity(tf_log_level)
-    logging.getLogger("tensorflow").propagate = False
+    logging.getLogger("tensorflow").propagate = True
 
 
 def update_sanic_log_level():

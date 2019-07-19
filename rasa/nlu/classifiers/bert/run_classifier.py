@@ -301,7 +301,12 @@ def model_fn_builder(
             )
 
             train_op = create_optimizer(
-                loss, learning_rate, num_train_steps, num_warmup_steps, use_tpu=False
+                loss,
+                learning_rate,
+                num_train_steps,
+                num_warmup_steps,
+                use_tpu=False,
+                vars_to_optimize=["output_weights", "output_bias"],
             )
 
             accuracy = tf.metrics.accuracy(label_ids, predicted_labels)
@@ -356,6 +361,10 @@ def model_fn_builder(
                     #   elif self._hparams.load_masks_from:
                     #     self.initialize_masks_from_ckpt(
                     #         self._hparams.load_masks_from)
+
+                g = tf.get_default_graph()
+                writer = tf.summary.FileWriter(logdir="tfgraph-bert-raw-train", graph=g)
+                writer.flush()
 
                 return tf.estimator.EstimatorSpec(
                     mode=mode,

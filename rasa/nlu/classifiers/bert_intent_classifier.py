@@ -184,7 +184,7 @@ class BertIntentClassifier(Component):
         num_train_steps = int(len(train_examples) / self.batch_size * self.epochs)
         train_steps_per_epoch = int(len(train_examples) / self.batch_size)
         if self.epochs <= 0:
-            num_train_steps = 1
+            num_train_steps = 20
 
         num_warmup_steps = int(num_train_steps * self.warmup_proportion)
 
@@ -196,6 +196,7 @@ class BertIntentClassifier(Component):
         train_features = convert_examples_to_features(
             train_examples, self.label_list, self.max_seq_length, self.tokenizer
         )
+        # exit(0)
 
         """
         # creating small representative dataset for full post-training quantisation with TFLite
