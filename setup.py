@@ -41,7 +41,7 @@ install_requires = [
     "numpy~=1.16",
     "scipy~=1.2",
     # "tensorflow~=1.14.0",
-    "tf-nightly",
+    #"tf-nightly",
     "apscheduler~=3.0",
     "tqdm~=4.0",
     "networkx~=2.3",
