@@ -267,7 +267,6 @@ class EmbeddingIntentClassifier(Component):
 
         self.evaluate_on_num_examples = config['evaluate_on_num_examples']
         self.validation_bs = config["validation_batch_size"]
-        print('Setting evaluation batch size to', self.validation_bs)
 
     def _load_params(self) -> None:
 
@@ -856,9 +855,6 @@ class EmbeddingIntentClassifier(Component):
 
         X, Y, intents_for_X = self._prepare_data_for_training(
             training_data, intent_dict)
-
-
-        print('Shapes', X[0].shape, Y[0].shape, type(X[0]))
 
         if self.share_embedding:
             if X[0].shape[-1] != Y[0].shape[-1]:
