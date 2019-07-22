@@ -178,6 +178,7 @@ class BertIntentClassifier(Component):
 
         run_config = tf.estimator.RunConfig(
             model_dir=self.checkpoint_dir,
+            keep_checkpoint_max=30,
             save_summary_steps=self.save_summary_steps,
             save_checkpoints_steps=self.save_checkpoints_steps,
         )
