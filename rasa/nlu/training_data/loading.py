@@ -137,8 +137,13 @@ def guess_format(filename: Text) -> Text:
     Returns:
         Guessed file format.
     """
-    guess = UNK
+    if not os.path.exists(filename):
+        if filename.lower().endswith('.md'):
+            return 'md'
+        else:
+            return 'json'
 
+    guess = UNK
     content = ""
     try:
         content = rasa.utils.io.read_file(filename)
