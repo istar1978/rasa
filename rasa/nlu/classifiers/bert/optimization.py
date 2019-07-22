@@ -74,6 +74,11 @@ def create_optimizer(
 
     tvars = tf.trainable_variables()
     if vars_to_optimize is not None:
+        tf.logging.info(
+            "Only the following variables will be optimised: {}".format(
+                vars_to_optimize
+            )
+        )
         tvars = [v for v in tvars if v.name.split(":")[0] in vars_to_optimize]
         if len(tvars) == 0:
             tf.logging.error("No variables will be optimised.")

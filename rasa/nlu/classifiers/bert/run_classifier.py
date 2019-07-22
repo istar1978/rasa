@@ -300,13 +300,23 @@ def model_fn_builder(
                 sparsity_technique=params["sparsity_technique"],
             )
 
+            print (
+                "### Finetuning only the hat: {} ###".format(
+                    params["finetune_hat_only"]
+                )
+            )
+
             train_op = create_optimizer(
                 loss,
                 learning_rate,
                 num_train_steps,
                 num_warmup_steps,
                 use_tpu=False,
-                vars_to_optimize=["output_weights", "output_bias"],
+                vars_to_optimize=(
+                    None
+                    if not params["finetune_hat_only"]
+                    else ["output_weights", "output_bias"]
+                ),
             )
 
             accuracy = tf.metrics.accuracy(label_ids, predicted_labels)
@@ -422,7 +432,6 @@ def create_model(
         )
 
         output_layer = model.get_pooled_output()
-        output_layer = tf.stop_gradient(output_layer, name="freeze_pretrained")
     else:
         if sparsity_technique is not None:
             raise ValueError(

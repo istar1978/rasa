@@ -63,6 +63,7 @@ class BertIntentClassifier(Component):
         "begin_pruning_epoch": 0,
         "end_pruning_epoch": 2,
         "pruning_frequency_steps": 1,
+        "finetune_hat_layer_only": False,
     }
 
     def _load_bert_params(self, config: Dict[Text, Any]) -> None:
@@ -121,6 +122,7 @@ class BertIntentClassifier(Component):
         ]
         self.warm_start_checkpoint = config["warm_start_checkpoint"]
         self.hat_layer_in_checkpoint = config["hat_layer_in_checkpoint"]
+        self.finetune_hat_only = config["finetune_hat_layer_only"]
 
     def _load_params(self) -> None:
         self._load_bert_params(self.component_config)
@@ -185,7 +187,8 @@ class BertIntentClassifier(Component):
         train_steps_per_epoch = int(len(train_examples) / self.batch_size)
         if self.epochs <= 0:
             num_train_steps = 20
-
+        print ("RUNNING {} EPOCHS, {} STEPS".format(self.epochs, num_train_steps))
+        # exit(0)
         num_warmup_steps = int(num_train_steps * self.warmup_proportion)
 
         tf.logging.info("***** Running training *****")
@@ -255,6 +258,7 @@ class BertIntentClassifier(Component):
                 "pruning_frequency": self.pruning_frequency_steps,
                 "target_sparsity": self.target_sparsity,
             },
+            "finetune_hat_only": self.finetune_hat_only,
         }
 
         warm_start_settings = None
@@ -279,7 +283,7 @@ class BertIntentClassifier(Component):
         # Start training
         self.estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
 
-        self.session = tf.Session()
+        self.session = tf.Session(config=tf.ConfigProto(log_device_placement=True))
 
         serving_input_receiver_fn = serving_input_fn_builder(self.max_seq_length)
 
