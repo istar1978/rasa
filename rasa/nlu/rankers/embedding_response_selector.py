@@ -298,7 +298,7 @@ class ResponseSelector(EmbeddingIntentClassifier):
 
             self.all_intents_embed_values = self._create_all_intents_embed(self.encoded_all_intents, iterator)
 
-            self.build_pred_graph(is_training)
+            self.pred_confidence = self.build_pred_graph(is_training)
 
 
     def persist(self,
@@ -321,43 +321,22 @@ class ResponseSelector(EmbeddingIntentClassifier):
             import errno
             if e.errno != errno.EEXIST:
                 raise
+
         with self.graph.as_default():
-            if not self.gpu_lstm:
-                self.graph.clear_collection('message_placeholder')
-                self.graph.add_to_collection('message_placeholder',
-                                             self.a_in)
 
-                self.graph.clear_collection('intent_placeholder')
-                self.graph.add_to_collection('intent_placeholder',
-                                             self.b_in)
+            self._persist_tensor("message_placeholder", self.a_in)
+            self._persist_tensor("intent_placeholder", self.b_in)
 
-                self.graph.clear_collection('similarity_op')
-                self.graph.add_to_collection('similarity_op',
-                                             self.sim_op)
+            self._persist_tensor("similarity_all", self.sim_all)
+            self._persist_tensor("similarity", self.sim)
 
-                self.graph.clear_collection('all_intents_embed_in')
-                self.graph.add_to_collection('all_intents_embed_in',
-                                             self.all_intents_embed_in)
-                self.graph.clear_collection('sim_all')
-                self.graph.add_to_collection('sim_all',
-                                             self.sim_all)
-
-                self.graph.clear_collection('word_embed')
-                self.graph.add_to_collection('word_embed',
-                                             self.word_embed)
-                self.graph.clear_collection('intent_embed')
-                self.graph.add_to_collection('intent_embed',
-                                             self.intent_embed)
+            self._persist_tensor("word_embed", self.word_embed)
+            self._persist_tensor("intent_embed", self.intent_embed)
+            self._persist_tensor("all_intents_embed", self.all_embedded_intents)
 
             saver = tf.train.Saver()
             saver.save(self.session, checkpoint)
 
-        placeholder_dims = {'a_in': np.int(self.a_in.shape[-1]),
-                            'b_in': np.int(self.b_in.shape[-1])}
-        with io.open(os.path.join(
-                model_dir,
-                file_name + "_placeholder_dims.pkl"), 'wb') as f:
-            pickle.dump(placeholder_dims, f)
         with io.open(os.path.join(
                 model_dir,
                 file_name + "_inv_responses_dict.pkl"), 'wb') as f:
@@ -389,64 +368,20 @@ class ResponseSelector(EmbeddingIntentClassifier):
             graph = tf.Graph()
             with graph.as_default():
                 sess = tf.Session()
-                if meta['gpu_lstm']:
-                    # rebuild tf graph for prediction
-                    with io.open(os.path.join(
-                            model_dir,
-                            file_name + "_placeholder_dims.pkl"), 'rb') as f:
-                        placeholder_dims = pickle.load(f)
-                    reg = tf.contrib.layers.l2_regularizer(meta['C2'])
 
-                    a_in = tf.placeholder(tf.float32, (None, None, placeholder_dims['a_in']),
-                                          name='a')
-                    b_in = tf.placeholder(tf.float32, (None, None, placeholder_dims['b_in']),
-                                          name='b')
-                    a = cls._create_tf_gpu_predict_embed(meta, a_in,
-                                                         meta['hidden_layers_sizes_a'],
-                                                         name='a_and_b' if meta['share_embedding'] else 'a')
-                    word_embed = tf.layers.dense(inputs=a,
-                                                 units=meta['embed_dim'],
-                                                 kernel_regularizer=reg,
-                                                 name='embed_layer_{}'.format('a'),
-                                                 reuse=tf.AUTO_REUSE)
-
-                    b = cls._create_tf_gpu_predict_embed(meta, b_in,
-                                                         meta['hidden_layers_sizes_b'],
-                                                         name='a_and_b' if meta['share_embedding'] else 'b')
-                    intent_embed = tf.layers.dense(inputs=b,
-                                                   units=meta['embed_dim'],
-                                                   kernel_regularizer=reg,
-                                                   name='embed_layer_{}'.format('b'),
-                                                   reuse=tf.AUTO_REUSE)
-
-                    tiled_intent_embed = cls._tf_sample_neg(intent_embed, None, None,
-                                                            tf.shape(word_embed)[0])
-
-                    sim_op = cls._tf_gpu_sim(meta, word_embed, tiled_intent_embed)
-
-                    all_intents_embed_in = tf.placeholder(tf.float32, (None, None, meta['embed_dim']),
-                                                          name='all_intents_embed')
-                    sim_all = cls._tf_gpu_sim(meta, word_embed, all_intents_embed_in)
-
-                    saver = tf.train.Saver()
-
-                else:
-                    saver = tf.train.import_meta_graph(checkpoint + '.meta')
-
-                    # iterator = tf.get_collection('data_iterator')[0]
-
-                    a_in = tf.get_collection('message_placeholder')[0]
-                    b_in = tf.get_collection('intent_placeholder')[0]
-
-                    sim_op = tf.get_collection('similarity_op')[0]
-
-                    all_intents_embed_in = tf.get_collection('all_intents_embed_in')[0]
-                    sim_all = tf.get_collection('sim_all')[0]
-
-                    word_embed = tf.get_collection('word_embed')[0]
-                    intent_embed = tf.get_collection('intent_embed')[0]
+                saver = tf.train.import_meta_graph(checkpoint + '.meta')
 
                 saver.restore(sess, checkpoint)
+
+                a_in = cls.load_tensor('message_placeholder')
+                b_in = cls.load_tensor('intent_placeholder')
+
+                sim_all = cls.load_tensor("similarity_all")
+                sim = cls.load_tensor("similarity")
+
+                word_embed = cls.load_tensor("word_embed")
+                intent_embed = cls.load_tensor("intent_embed")
+                all_intents_embed = cls.load_tensor("all_intents_embed")
 
             with io.open(os.path.join(
                     model_dir,
@@ -470,8 +405,8 @@ class ResponseSelector(EmbeddingIntentClassifier):
                 graph=graph,
                 message_placeholder=a_in,
                 response_placeholder=b_in,
-                similarity_op=sim_op,
-                all_responses_embed_in=all_intents_embed_in,
+                similarity_op=sim,
+                all_responses_embed_in=all_intents_embed,
                 sim_all=sim_all,
                 word_embed=word_embed,
                 response_embed=intent_embed

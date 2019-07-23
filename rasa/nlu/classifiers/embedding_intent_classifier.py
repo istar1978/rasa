@@ -157,8 +157,7 @@ class EmbeddingIntentClassifier(Component):
                  graph: Optional['tf.Graph'] = None,
                  message_placeholder: Optional['tf.Tensor'] = None,
                  intent_placeholder: Optional['tf.Tensor'] = None,
-                 pred_confidence : Optional['tf.Tensor'] = None,
-                 similarity : Optional['tf.Tensor'] = None,
+                 similarity: Optional['tf.Tensor'] = None,
                  all_intents_embed_in: Optional['tf.Tensor'] = None,
                  sim_all: Optional['tf.Tensor'] = None,
                  word_embed: Optional['tf.Tensor'] = None,
@@ -386,194 +385,7 @@ class EmbeddingIntentClassifier(Component):
 
         return x
 
-    def _create_rnn_cell(self,
-                         is_training: 'tf.Tensor',
-                         rnn_size: int,
-                         real_length) -> 'tf.contrib.rnn.RNNCell':
-        """Create one rnn cell."""
 
-        # chrono initialization for forget bias
-        # assuming that characteristic time is max dialogue length
-        # left border that initializes forget gate close to 0
-        bias_0 = -1.0
-        characteristic_time = tf.reduce_mean(tf.cast(real_length, tf.float32))
-        # right border that initializes forget gate close to 1
-        bias_1 = tf.log(characteristic_time - 1.)
-        fbias = (bias_1 - bias_0) * np.random.random(rnn_size) + bias_0
-
-        keep_prob = 1.0 - (self.droprate *
-                           tf.cast(is_training, tf.float32))
-
-        return ChronoBiasLayerNormBasicLSTMCell(
-            num_units=rnn_size,
-            layer_norm=self.layer_norm,
-            forget_bias=fbias,
-            input_bias=-fbias,
-            dropout_keep_prob=keep_prob,
-            reuse=tf.AUTO_REUSE
-        )
-
-    def _create_tf_rnn_embed(self, x_in: 'tf.Tensor', is_training: 'tf.Tensor',
-                             layer_sizes: List[int], name: Text) -> 'tf.Tensor':
-        """Create rnn for dialogue level embedding."""
-
-        reg = tf.contrib.layers.l2_regularizer(self.C2)
-        # mask different length sequences
-        mask = tf.sign(tf.reduce_max(x_in, -1))
-        last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
-        mask = tf.cumsum(last, axis=1, reverse=True)
-        real_length = tf.cast(tf.reduce_sum(mask, 1), tf.int32)
-
-        last = tf.expand_dims(last, -1)
-
-        x = tf.nn.relu(x_in)
-
-        if len(layer_sizes) == 0:
-            # return simple bag of words
-            return tf.reduce_sum(x, 1)
-
-        if self.fused_lstm:
-            x = tf.transpose(x, [1, 0, 2])
-
-            for i, layer_size in enumerate(layer_sizes):
-                if self.bidirectional:
-                    cell_fw = tf.contrib.rnn.LSTMBlockFusedCell(layer_size,
-                                                                reuse=tf.AUTO_REUSE,
-                                                                name='rnn_fw_encoder_{}_{}'.format(name, i))
-                    x_fw, _ = cell_fw(x, dtype=tf.float32, sequence_length=real_length)
-
-                    cell_bw = tf.contrib.rnn.LSTMBlockFusedCell(layer_size,
-                                                                reuse=tf.AUTO_REUSE,
-                                                                name='rnn_bw_encoder_{}_{}'.format(name, i))
-                    cell_bw = tf.contrib.rnn.TimeReversedFusedRNN(cell_bw)
-                    x_bw, _ = cell_bw(x, dtype=tf.float32, sequence_length=real_length)
-
-                    x = tf.concat([x_fw, x_bw], -1)
-
-                else:
-                    cell = tf.contrib.rnn.LSTMBlockFusedCell(layer_size,
-                                                             reuse=tf.AUTO_REUSE,
-                                                             name='rnn_encoder_{}_{}'.format(name, i))
-                    x, _ = cell(x, dtype=tf.float32, sequence_length=real_length)
-
-            x = tf.transpose(x, [1, 0, 2])
-            x = tf.reduce_sum(x * last, 1)
-
-        elif self.gpu_lstm:
-            # only trains and predicts on gpu_lstm
-            x = tf.transpose(x, [1, 0, 2])
-
-            if self.bidirectional:
-                direction = 'bidirectional'
-            else:
-                direction = 'unidirectional'
-
-            lstm = tf.contrib.cudnn_rnn.CudnnLSTM(len(layer_sizes),
-                                                  layer_sizes[0],
-                                                  direction=direction,
-                                                  name='rnn_encoder_{}'.format(name))
-
-            x, _ = lstm(x, training=True)
-            # prediction graph is created separately
-
-            x = tf.transpose(x, [1, 0, 2])
-            x = tf.reduce_sum(x * last, 1)
-
-        elif self.transformer:
-            hparams = transformer_small()
-
-            hparams.num_hidden_layers = len(layer_sizes)
-            hparams.hidden_size = layer_sizes[0]
-            # it seems to be factor of 4 for transformer architectures in t2t
-            hparams.filter_size = layer_sizes[0] * 4
-            hparams.num_heads = self.num_heads
-            # hparams.relu_dropout = self.droprate
-            hparams.pos = self.pos_encoding
-
-            hparams.max_length = self.max_seq_length
-            if not self.bidirectional:
-                hparams.unidirectional_encoder = True
-
-            # When not in training mode, set all forms of dropout to zero.
-            for key, value in hparams.values().items():
-                if key.endswith("dropout") or key == "label_smoothing":
-                    setattr(hparams, key, value * tf.cast(is_training, tf.float32))
-
-            x = tf.layers.dense(inputs=x,
-                                units=hparams.hidden_size,
-                                use_bias=False,
-                                kernel_initializer=tf.random_normal_initializer(0.0, hparams.hidden_size**-0.5),
-                                kernel_regularizer=reg,
-                                name='transformer_embed_layer_{}'.format(name),
-                                reuse=tf.AUTO_REUSE)
-            x = tf.layers.dropout(x, rate=hparams.layer_prepostprocess_dropout, training=is_training)
-
-            if hparams.multiply_embedding_mode == "sqrt_depth":
-                x *= hparams.hidden_size**0.5
-
-            x *= tf.expand_dims(mask, -1)
-
-            with tf.variable_scope('transformer_{}'.format(name), reuse=tf.AUTO_REUSE):
-                (x,
-                 self_attention_bias,
-                 encoder_decoder_attention_bias
-                 ) = transformer_prepare_encoder(x, None, hparams)
-
-                if hparams.pos == 'custom_timing':
-                    x = add_timing_signal_1d(x, max_timescale=self.pos_max_timescale)
-
-                x *= tf.expand_dims(mask, -1)
-
-                x = tf.nn.dropout(x, 1.0 - hparams.layer_prepostprocess_dropout)
-
-                attn_bias_for_padding = None
-                # Otherwise the encoder will just use encoder_self_attention_bias.
-                if hparams.unidirectional_encoder:
-                    attn_bias_for_padding = encoder_decoder_attention_bias
-
-                x = transformer_encoder(
-                    x,
-                    self_attention_bias,
-                    hparams,
-                    nonpadding=mask,
-                    attn_bias_for_padding=attn_bias_for_padding)
-
-            if self.use_last:
-                x = tf.reduce_sum(x * last, 1)
-            else:
-                x *= tf.expand_dims(mask, -1)
-                sum_mask = tf.reduce_sum(tf.expand_dims(mask, -1), 1)
-                # fix for zero length sequences
-                sum_mask = tf.where(sum_mask < 1, tf.ones_like(sum_mask), sum_mask)
-                x = tf.reduce_sum(x, 1) / sum_mask
-
-        else:
-            for i, layer_size in enumerate(layer_sizes):
-                if self.bidirectional:
-                    cell_fw = self._create_rnn_cell(is_training, layer_size, real_length)
-                    cell_bw = self._create_rnn_cell(is_training, layer_size, real_length)
-
-                    x, _ = tf.nn.bidirectional_dynamic_rnn(
-                        cell_fw, cell_bw, x,
-                        dtype=tf.float32,
-                        sequence_length=real_length,
-                        scope='rnn_encoder_{}_{}'.format(name, i)
-                    )
-                    x = tf.concat(x, 2)
-
-                else:
-                    cell = self._create_rnn_cell(is_training, layer_size, real_length)
-
-                    x, _ = tf.nn.dynamic_rnn(
-                        cell, x,
-                        dtype=tf.float32,
-                        sequence_length=real_length,
-                        scope='rnn_encoder_{}_{}'.format(name, i)
-                    )
-
-            x = tf.reduce_sum(x * last, 1)
-
-        return x
 
     def _create_tf_embed_a(self,
                            a_in: 'tf.Tensor',
@@ -581,14 +393,9 @@ class EmbeddingIntentClassifier(Component):
                            ) -> 'tf.Tensor':
         """Create tf graph for training"""
 
-        if len(a_in.shape) == 2:
-            a = self._create_tf_embed_nn(a_in, is_training,
-                                         self.hidden_layer_sizes['a'],
-                                         name='a_and_b' if self.share_embedding else 'a')
-        else:
-            a = self._create_tf_rnn_embed(a_in, is_training,
-                                          self.hidden_layer_sizes['a'],
-                                          name='a_and_b' if self.share_embedding else 'a')
+        a = self._create_tf_embed_nn(a_in, is_training,
+                                     self.hidden_layer_sizes['a'],
+                                     name='a_and_b' if self.share_embedding else 'a')
 
         reg = tf.contrib.layers.l2_regularizer(self.C2)
         emb_a = tf.layers.dense(inputs=a,
@@ -609,15 +416,10 @@ class EmbeddingIntentClassifier(Component):
                            ) -> 'tf.Tensor':
         """Create tf graph for training"""
 
-        if len(b_in.shape) == 2:
-            b = self._create_tf_embed_nn(b_in, is_training,
-                                         self.hidden_layer_sizes['b'],
-                                         name='a_and_b' if self.share_embedding else 'b')
 
-        else:
-            b = self._create_tf_rnn_embed(b_in, is_training,
-                                          self.hidden_layer_sizes['b'],
-                                          name='a_and_b' if self.share_embedding else 'b')
+        b = self._create_tf_embed_nn(b_in, is_training,
+                                     self.hidden_layer_sizes['b'],
+                                     name='a_and_b' if self.share_embedding else 'b')
 
         reg = tf.contrib.layers.l2_regularizer(self.C2)
         emb_b = tf.layers.dense(inputs=b,
@@ -844,10 +646,15 @@ class EmbeddingIntentClassifier(Component):
         """Get negative examples from given tensor."""
 
         batch_size = tf.shape(raw_pos)[0]
+        total_cands = tf.shape(all_embed)[0]
         raw_flat = self._tf_make_flat(raw_pos)
 
-        neg_ids = tf.random.categorical(tf.log(tf.ones((batch_size, tf.shape(all_raw)[0]))),
-                                        self.num_neg)
+        all_indices = tf.tile(tf.expand_dims(tf.range(0, total_cands, 1), 0), (batch_size, 1))
+        shuffled_indices = tf.transpose(tf.random.shuffle(tf.transpose(all_indices, (1, 0))), (1, 0))
+        neg_ids = tf.slice(shuffled_indices, [0, 0], [-1, tf.math.minimum(total_cands, self.num_neg)])
+
+        # neg_ids = tf.random.categorical(tf.log(tf.ones((batch_size, tf.shape(all_raw)[0]))),
+        #                                 self.num_neg)
 
         bad_negs_flat = self._tf_calc_iou_mask(raw_flat, all_raw, neg_ids)
         bad_negs = tf.reshape(bad_negs_flat, (batch_size, -1))
@@ -1614,7 +1421,6 @@ class EmbeddingIntentClassifier(Component):
             self._persist_tensor("intent_placeholder", self.b_in)
 
             self._persist_tensor("similarity_all", self.sim_all)
-            self._persist_tensor("pred_confidence", self.pred_confidence)
             self._persist_tensor("similarity", self.sim)
 
             self._persist_tensor("word_embed", self.word_embed)
@@ -1671,14 +1477,11 @@ class EmbeddingIntentClassifier(Component):
                 b_in = cls.load_tensor('intent_placeholder')
 
                 sim_all = cls.load_tensor("similarity_all")
-                pred_confidence = cls.load_tensor("pred_confidence")
                 sim = cls.load_tensor("similarity")
 
                 word_embed = cls.load_tensor("word_embed")
                 intent_embed = cls.load_tensor("intent_embed")
                 all_intents_embed = cls.load_tensor("all_intents_embed")
-
-                print(word_embed.get_shape(), intent_embed.get_shape(), all_intents_embed.get_shape())
 
             with io.open(os.path.join(
                     model_dir,
@@ -1703,7 +1506,6 @@ class EmbeddingIntentClassifier(Component):
                 graph=graph,
                 message_placeholder=a_in,
                 intent_placeholder=b_in,
-                pred_confidence=pred_confidence,
                 similarity=sim,
                 all_intents_embed_in=all_intents_embed,
                 sim_all=sim_all,
