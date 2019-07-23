@@ -82,18 +82,25 @@ def create_optimizer(
         tvars = [v for v in tvars if v.name.split(":")[0] in vars_to_optimize]
         if len(tvars) == 0:
             tf.logging.error("No variables will be optimised.")
-    grads = tf.gradients(loss, tvars)
 
-    # This is how the model was pre-trained.
-    (grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)
+    with tf.name_scope("optimizer"):
+        grads = tf.gradients(loss, tvars, name="gradients")
 
-    train_op = optimizer.apply_gradients(zip(grads, tvars), global_step=global_step)
+        # This is how the model was pre-trained.
+        (grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0, name="clip_gradients")
 
-    # Normally the global step update is done inside of `apply_gradients`.
-    # However, `AdamWeightDecayOptimizer` doesn't do this. But if you use
-    # a different optimizer, you should probably take this line out.
-    new_global_step = global_step + 1
-    train_op = tf.group(train_op, [global_step.assign(new_global_step)])
+        train_op = optimizer.apply_gradients(
+            zip(grads, tvars), global_step=global_step, name="apply_gradients"
+        )
+
+        # Normally the global step update is done inside of `apply_gradients`.
+        # However, `AdamWeightDecayOptimizer` doesn't do this. But if you use
+        # a different optimizer, you should probably take this line out.
+        new_global_step = global_step + 1
+        train_op = tf.group(
+            train_op, [global_step.assign(new_global_step)], name="train_op"
+        )
+
     return train_op
 
 

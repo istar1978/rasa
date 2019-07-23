@@ -29,6 +29,8 @@ import tensorflow as tf
 from tensorflow.keras import activations
 from tensorflow.keras import initializers
 
+from tensorflow.python.ops import math_ops
+
 from tensorflow.contrib.model_pruning.python.layers import layers as pruning_layers
 
 
@@ -1002,7 +1004,7 @@ def dense_pruned(
             bias_initializer=bias_initializer,
             name=name,
         )
-    elif sparsity_technique == "weight_pruning":
+    elif sparsity_technique in ["weight_pruning", "neuron_pruning"]:
         if kernel_initializer is None:
             kernel_initializer = create_initializer()
         if activation is None:
@@ -1037,6 +1039,83 @@ def dense_pruned(
                 biases_initializer=bias_initializer,
                 scope=name,
             )
+        elif sparsity_technique == "neuron_pruning":
+            bias_initializer = bias_initializer if use_bias else None
+            layer = pruning_layers.masked_fully_connected(
+                inputs=x,
+                num_outputs=units,
+                activation_fn=activation,
+                weights_initializer=kernel_initializer,
+                biases_initializer=bias_initializer,
+                scope=name,
+                reuse=tf.compat.v1.AUTO_REUSE,
+            )
+            # use the same scope as the one in which the weight matrix is created when calling
+            # pruning_layers.masked_fully_connected()
+            with tf.variable_scope(name, reuse=tf.compat.v1.AUTO_REUSE) as dense_scope:
+                # print(dense_scope.name)
+                activation_accumulator = tf.get_variable(
+                    initializer=tf.zeros_initializer,
+                    shape=[units],
+                    trainable=False,
+                    name="activation_accumulator",
+                )
+                gradient_accumulator = tf.get_variable(
+                    initializer=tf.zeros_initializer,
+                    shape=[units],
+                    trainable=False,
+                    name="gradient_accumulator",
+                )
+                tf.get_default_graph().add_to_collection(
+                    "activation_accumulators", activation_accumulator
+                )
+                tf.get_default_graph().add_to_collection(
+                    "gradient_accumulators", gradient_accumulator
+                )
+                zeros = tf.zeros(shape=[units])
+                activation_accumulator_reset_op = tf.assign(
+                    activation_accumulator, zeros, name="reset_activations_accumulator"
+                )
+                gradient_accumulator_reset_op = tf.assign(
+                    gradient_accumulator, zeros, name="reset_gradients_accumulator"
+                )
+                accumulator_reset_op = tf.group(
+                    activation_accumulator_reset_op, gradient_accumulator_reset_op
+                )
+                tf.get_default_graph().add_to_collection(
+                    "accumulators_reset", accumulator_reset_op
+                )
+
+                """
+                Output of this dense is: inputs * weights, e.g. (128x768) * (768*768).
+                Hence, the >>>columns<<< of the matrix correspond to the neurons, and >>>columns<<<
+                of the activation correspond to neurons' outputs. Hence, we wanna sum all rows 
+                (along axis 0) to get neuron-level scores.
+                """
+                scope = tf.get_variable_scope().name
+                # print(scope)
+                matmul = tf.get_default_graph().get_tensor_by_name(
+                    "{}/MatMul:0".format(scope)
+                )
+                # print(matmul.shape)
+                activations_per_neuron = tf.math.reduce_sum(matmul, axis=0)
+                # print(activations_per_neuron.shape)
+                activation_accumulator_update_op = tf.assign_add(
+                    activation_accumulator,
+                    activations_per_neuron,
+                    name="activation_accumulator_update",
+                )
+                tf.get_default_graph().add_to_collection(
+                    "accumulators_update", activation_accumulator_update_op
+                )
+
+                weight_matrix = tf.get_variable(name="weights")
+                tf.get_default_graph().add_to_collection(
+                    "matrices_to_prune", weight_matrix
+                )
+                # print(weight_matrix)
+
+            return layer
 
 
 def get_shape_list(tensor, expected_rank=None, name=None):

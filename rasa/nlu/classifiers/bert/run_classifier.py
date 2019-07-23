@@ -26,6 +26,7 @@ from rasa.nlu.classifiers.bert.modeling import BertModel
 import tensorflow as tf
 import tensorflow_hub as hub
 from tensorflow.contrib.model_pruning.python import pruning as magnitude_pruning
+from rasa.nlu.classifiers.fake_neuron_pruning import pruning as neuron_pruning
 
 
 class InputExample(object):
@@ -285,9 +286,8 @@ def model_fn_builder(
         label_ids = features["label_ids"]
 
         is_predicting = mode == tf.estimator.ModeKeys.PREDICT
-
         if not is_predicting:
-
+            g = tf.get_default_graph()
             (loss, predicted_labels, log_probs) = create_model(
                 is_predicting,
                 input_ids,
@@ -298,25 +298,6 @@ def model_fn_builder(
                 bert_tfhub_module_handle,
                 bert_config,
                 sparsity_technique=params["sparsity_technique"],
-            )
-
-            print (
-                "### Finetuning only the hat: {} ###".format(
-                    params["finetune_hat_only"]
-                )
-            )
-
-            train_op = create_optimizer(
-                loss,
-                learning_rate,
-                num_train_steps,
-                num_warmup_steps,
-                use_tpu=False,
-                vars_to_optimize=(
-                    None
-                    if not params["finetune_hat_only"]
-                    else ["output_weights", "output_bias"]
-                ),
             )
 
             accuracy = tf.metrics.accuracy(label_ids, predicted_labels)
@@ -351,6 +332,18 @@ def model_fn_builder(
 
             if mode == tf.estimator.ModeKeys.TRAIN:
                 if params["sparsity_technique"] == "weight_pruning":
+                    train_op = create_optimizer(
+                        loss,
+                        learning_rate,
+                        num_train_steps,
+                        num_warmup_steps,
+                        use_tpu=False,
+                        vars_to_optimize=(
+                            None
+                            if not params["finetune_hat_only"]
+                            else ["output_weights", "output_bias"]
+                        ),
+                    )
                     if not "load_masks_from" in params:
                         # If we are loading trained masks, don't add the mask update
                         # step to the training process and keep the masks static
@@ -365,16 +358,93 @@ def model_fn_builder(
                             train_op = mask_update_op
                     check_global_sparsity()
 
-                    # if self._hparams.warm_start_from:
-                    #     self.initialize_from_ckpt(
-                    #         self._hparams.warm_start_from)
-                    #   elif self._hparams.load_masks_from:
-                    #     self.initialize_masks_from_ckpt(
-                    #         self._hparams.load_masks_from)
+                elif params["sparsity_technique"] == "neuron_pruning":
+                    # prepare gradient and activation accumulators
+                    # accumulate activations and grads by summing, this basically requires two ops to be added to train_op
+                    # step through all relevant vars
+                    # multiply activations by gradients, sum as required to get neuron scores
+                    # select K smallest neurons
+                    # update the weight matrix by setting stuff to 0
 
-                g = tf.get_default_graph()
-                writer = tf.summary.FileWriter(logdir="tfgraph-bert-raw-train", graph=g)
-                writer.flush()
+                    prunable_vars = g.get_collection("matrices_to_prune")
+                    with tf.name_scope("neuron_pruning_training"):
+                        grads = tf.gradients(
+                            loss, prunable_vars, name="gradients_for_pruning"
+                        )
+                        grad_accumulators = g.get_collection("gradient_accumulators")
+
+                        for grad, var in zip(grads, prunable_vars):
+                            scope = "/".join(var.name.split("/")[:-1])
+                            grad_accumulator_name = scope + "/gradient_accumulator:0"
+                            grad_accumulator = [
+                                a
+                                for a in grad_accumulators
+                                if a.name == grad_accumulator_name
+                            ][0]
+                            grads_per_neuron = tf.math.reduce_sum(grad, axis=0)
+                            with tf.name_scope(scope):
+                                grad_accumulator_update_op = tf.assign_add(
+                                    grad_accumulator,
+                                    grads_per_neuron,
+                                    name="gradient_accumulator_update",
+                                )
+                            g.add_to_collection(
+                                "accumulators_update", grad_accumulator_update_op
+                            )
+
+                        """
+                        for gkey in ['accumulators_reset', 'accumulators_update', "matrices_to_prune"]:
+                            print("##### {} #####".format(gkey))
+                            [print(v) for v in g.get_collection(gkey)]
+                        """
+                        # exit(0)
+                        update_accumulators_op = tf.group(
+                            g.get_collection("accumulators_update"),
+                            name="all_accumulators_update_op",
+                        )
+
+                        train_op = create_optimizer(
+                            loss,
+                            learning_rate,
+                            num_train_steps,
+                            num_warmup_steps,
+                            use_tpu=False,
+                            vars_to_optimize=(
+                                None
+                                if not params["finetune_hat_only"]
+                                else ["output_weights", "output_bias"]
+                            ),
+                        )
+
+                        writer = tf.summary.FileWriter(
+                            logdir="tfgraph-bert-raw-train-np", graph=g
+                        )
+                        writer.flush()
+                        # exit(0)
+
+                        with tf.control_dependencies([train_op]):
+                            with tf.control_dependencies([update_accumulators_op]):
+                                mp_hparams = pruning_hparams(
+                                    params["sparsification_params"]
+                                )
+                                p = neuron_pruning.Pruning(
+                                    mp_hparams, global_step=tf.train.get_global_step()
+                                )
+                                mask_update_op = p.conditional_mask_update_op()
+                                train_op = mask_update_op
+                else:
+                    train_op = create_optimizer(
+                        loss,
+                        learning_rate,
+                        num_train_steps,
+                        num_warmup_steps,
+                        use_tpu=False,
+                        vars_to_optimize=(
+                            None
+                            if not params["finetune_hat_only"]
+                            else ["output_weights", "output_bias"]
+                        ),
+                    )
 
                 return tf.estimator.EstimatorSpec(
                     mode=mode,
