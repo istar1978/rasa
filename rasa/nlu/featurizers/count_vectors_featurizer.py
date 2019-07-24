@@ -324,7 +324,6 @@ class CountVectorsFeaturizer(Featurizer):
         self._check_OOV_present(lem_resps)
 
         # noinspection PyPep8Naming
-        print(self.sequence,self.sparse, self.use_shared_vocab)
         try:
             if not self.sequence:
                 if self.use_shared_vocab:

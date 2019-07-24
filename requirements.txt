@@ -48,3 +48,5 @@ kafka-python==1.4.6
 sklearn-crfsuite==0.3.6
 psycopg2-binary==2.8.2
 tensor2tensor==1.13.4
+tensorflow-probability==0.5.0
+pandas==0.24.2

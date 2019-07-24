@@ -1162,6 +1162,10 @@ class EmbeddingIntentClassifier(Component):
         val_acc = 0
         train_loss = 0
         val_loss = 0
+        ep_train_loss = 0
+        ep_train_acc = 0
+        ep_val_loss = 0
+        ep_val_acc = 0
         interrupted = False
 
         iter_num = 0
@@ -1216,6 +1220,13 @@ class EmbeddingIntentClassifier(Component):
 
             ep_train_loss /= batches_per_epoch
             ep_train_acc /= batches_per_epoch
+
+            pbar.set_postfix({
+                "Train loss": "{:.3f}".format(ep_train_loss),
+                "Train acc": "{:.3f}".format(ep_train_acc),
+                "Val loss": "{:.3f}".format(ep_val_loss),
+                "Val acc": "{:.3f}".format(ep_val_acc)
+            })
 
             if self.evaluate_on_num_examples and val_init_op is not None:
 
