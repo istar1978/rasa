@@ -143,7 +143,10 @@ class EmbeddingIntentClassifier(Component):
         "evaluate_on_num_examples": 1000,   # large values may hurt performance
 
         # Batch size for evaluation runs
-        "validation_batch_size": 64
+        "validation_batch_size": 64,
+
+        # tb summary dir
+        "summary_dir": './tb_logs'
 
 
     }
@@ -267,6 +270,8 @@ class EmbeddingIntentClassifier(Component):
 
         self.evaluate_on_num_examples = config['evaluate_on_num_examples']
         self.validation_bs = config["validation_batch_size"]
+
+        self.summary_dir = config["summary_dir"]
 
     def _load_params(self) -> None:
 
@@ -841,7 +846,7 @@ class EmbeddingIntentClassifier(Component):
               **kwargs: Any) -> None:
         """Train the embedding intent classifier on a data set."""
 
-        tb_sum_dir = '/tmp/tb_logs/embedding_intent_classifier'
+        tb_sum_dir = os.path.join(self.summary_dir,'embedding_intent_classifier')
 
         intent_dict = self._create_label_dict(training_data)
         if len(intent_dict) < 2:

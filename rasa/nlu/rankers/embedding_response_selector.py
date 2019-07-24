@@ -141,7 +141,10 @@ class ResponseSelector(EmbeddingIntentClassifier):
         "evaluate_on_num_examples": 1000,  # large values may hurt performance
 
         # Batch size for evaluation runs
-        "validation_batch_size": 64
+        "validation_batch_size": 64,
+
+        # tb summary dir
+        "summary_dir": './tb_logs'
 
     }
 
@@ -255,7 +258,7 @@ class ResponseSelector(EmbeddingIntentClassifier):
               **kwargs: Any) -> None:
         """Train the embedding intent classifier on a data set."""
 
-        tb_sum_dir = '/tmp/tb_logs/response_selector'
+        tb_sum_dir = os.path.join(self.summary_dir,'response_selector')
 
         intent_dict = self._create_label_dict(training_data,label_type='response')
 
