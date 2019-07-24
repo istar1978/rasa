@@ -143,7 +143,9 @@ class EmbeddingIntentClassifier(Component):
         "evaluate_on_num_examples": 1000,   # large values may hurt performance
 
         # Batch size for evaluation runs
-        "validation_batch_size": 64
+        "validation_batch_size": 64,
+
+        "summary_dir" : os.path.join(os.getcwd(), 'tb_logs')
 
 
     }
@@ -267,6 +269,7 @@ class EmbeddingIntentClassifier(Component):
 
         self.evaluate_on_num_examples = config['evaluate_on_num_examples']
         self.validation_bs = config["validation_batch_size"]
+        self.summary_dir = config["summary_dir"]
 
     def _load_params(self) -> None:
 
@@ -607,6 +610,12 @@ class EmbeddingIntentClassifier(Component):
 
     def train_val_split(self, X, Y, intents_for_X):
 
+        if self.evaluate_on_num_examples >= X.shape[0]:
+
+            logger.info("Number of Evaluate examples less that total examples. Explicitly setting evaluate fraction to "
+                        "0.2")
+            self.evaluate_on_num_examples = int(0.2 * X.shape[0])
+
         X_train, X_val, Y_train, Y_val, X_train_intents, X_val_intents = train_test_split(X, Y, intents_for_X,
                                                                                           test_size=self.evaluate_on_num_examples,
                                                                                           stratify=intents_for_X)
@@ -792,9 +801,7 @@ class EmbeddingIntentClassifier(Component):
             loss *= mask
             loss = tf.reduce_sum(loss, -1) / tf.reduce_sum(mask, 1)
         else:
-            loss = tf.reduce_sum(loss, -1)
-        # average the loss over the batch
-        loss = tf.reduce_mean(loss)
+            loss = tf.reduce_mean(loss)
 
         # add regularization losses
         loss += tf.losses.get_regularization_loss()
@@ -979,10 +986,12 @@ class EmbeddingIntentClassifier(Component):
                         "".format(self.evaluate_every_num_epochs))
 
         pbar = tqdm(range(self.epochs), desc="Epochs", disable=is_logging_disabled())
-        train_acc = 0
-        val_acc = 0
-        train_loss = 0
-        val_loss = 0
+
+        ep_train_loss = 0
+        ep_train_acc = 0
+        ep_val_loss = 0
+        ep_val_acc = 0
+
         interrupted = False
 
         iter_num = 0
@@ -1034,6 +1043,13 @@ class EmbeddingIntentClassifier(Component):
 
             ep_train_loss /= batches_per_epoch
             ep_train_acc /= batches_per_epoch
+
+            pbar.set_postfix({
+                "Train loss": "{:.3f}".format(ep_train_loss),
+                "Train acc": "{:.3f}".format(ep_train_acc),
+                "Val loss": "{:.3f}".format(ep_val_loss),
+                "Val acc": "{:.3f}".format(ep_val_acc)
+            })
 
             if self.evaluate_on_num_examples and val_init_op is not None:
 
@@ -1110,7 +1126,7 @@ class EmbeddingIntentClassifier(Component):
               **kwargs: Any) -> None:
         """Train the embedding intent classifier on a data set."""
 
-        tb_sum_dir = '/tmp/tb_logs/embedding_intent_classifier'
+        tb_sum_dir = os.path.join(self.summary_dir, 'embedding_intent_classifier')
 
         intent_dict = self._create_label_dict(training_data)
         if len(intent_dict) < 2:
