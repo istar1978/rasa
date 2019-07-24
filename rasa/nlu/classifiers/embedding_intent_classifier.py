@@ -430,6 +430,11 @@ class EmbeddingIntentClassifier(Component):
                                 kernel_regularizer=reg,
                                 name='embed_layer_{}'.format('b'),
                                 reuse=tf.AUTO_REUSE)
+
+        if self.similarity_type == 'cosine':
+            # normalize embedding vectors for cosine similarity
+            emb_b = self.normalize_for_cosine(emb_b)
+
         return emb_b
 
 
@@ -552,6 +557,7 @@ class EmbeddingIntentClassifier(Component):
 
     def gen_stratified_batch(self, X, Y, intents_for_X, batch_size):
 
+        # num_batches = X.shape[0] // min(Counter(intents_for_X))
         num_batches = X.shape[0] // batch_size + int(X.shape[0] % batch_size > 0)
         batch_ex_per_intent = max(batch_size//len(set(intents_for_X)), 1)
 
@@ -645,7 +651,7 @@ class EmbeddingIntentClassifier(Component):
 
         iou = (tf.reduce_sum(intersection_b_in_flat, -1)
                / tf.reduce_sum(union_b_in_flat, -1))
-        return 1. - tf.nn.relu(tf.sign(1. - iou))
+        return 1. - tf.nn.relu(tf.sign(self.iou_threshold - iou))
 
 
     def _tf_get_negs(self,
@@ -794,14 +800,8 @@ class EmbeddingIntentClassifier(Component):
         max_sim_neg_dial = tf.maximum(0., tf.reduce_max(sim_neg_intent_word, -1))
         loss += max_sim_neg_dial * self.C_emb
 
-
-        # average the loss over sequence length
-        if mask is not None:
-            # mask loss for different length sequences
-            loss *= mask
-            loss = tf.reduce_sum(loss, -1) / tf.reduce_sum(mask, 1)
-        else:
-            loss = tf.reduce_mean(loss)
+        # average the loss over the batch
+        loss = tf.reduce_mean(loss)
 
         # add regularization losses
         loss += tf.losses.get_regularization_loss()
@@ -993,6 +993,8 @@ class EmbeddingIntentClassifier(Component):
         ep_val_acc = 0
 
         interrupted = False
+        ep_val_loss = 0
+        ep_val_acc = 0
 
         iter_num = 0
         for ep in pbar:
@@ -1059,9 +1061,9 @@ class EmbeddingIntentClassifier(Component):
 
                     self.session.run(val_init_op)
 
-                    ep_val_loss = 0
-                    ep_val_acc = 0
                     val_num_batches = 0
+                    ep_val_loss = 0
+                    ep_val_acc  = 0
 
                     while True:
 
@@ -1077,10 +1079,7 @@ class EmbeddingIntentClassifier(Component):
                             summary = return_vals[-1]
                             batch_acc = return_vals[-2]
 
-                            # print('Acc', batch_acc)
-
                             batch_loss = return_vals[-3]
-
 
                             test_tb_writer.add_summary(summary, iter_num)
 
@@ -1090,7 +1089,6 @@ class EmbeddingIntentClassifier(Component):
                         except KeyboardInterrupt:
                             interrupted = True
                             break
-
 
                         ep_val_loss += batch_loss
                         ep_val_acc += batch_acc
