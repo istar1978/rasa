@@ -346,6 +346,7 @@ class EmbeddingIntentClassifier(Component):
         """Prepare data for training"""
 
         filtered_examples = [e for e in training_data.intent_examples]
+
         if non_intents:
             filtered_examples = [e for e in training_data.intent_examples if not e.get("is_intent")]
 
@@ -1018,6 +1019,11 @@ class EmbeddingIntentClassifier(Component):
             return batch, training_init_op, None, iterator
 
     def train_val_split(self, X, Y, intents_for_X):
+
+
+        if self.evaluate_on_num_examples > Y.shape[0]:
+            logger.info("Evaluation size greater than total number of examples. Explicitly bringing it down to 0.2 frac of total number of examples")
+            self.evaluate_on_num_examples = int(Y.shape[0] * 0.2)
 
         X_train, X_val, Y_train, Y_val, X_train_intents, X_val_intents = train_test_split(X, Y, intents_for_X,
                                                                                           test_size=self.evaluate_on_num_examples,

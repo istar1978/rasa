@@ -8,7 +8,7 @@ import logging
 import typing
 from typing import Any, Dict, List, Optional, Text, Type
 
-from rasa.nlu.featurizers.glove_featurizer import GloveFeaturizer
+# from rasa.nlu.featurizers.glove_featurizer import GloveFeaturizer
 from rasa.nlu.rankers.embedding_response_selector import ResponseSelector
 from rasa.nlu.classifiers.embedding_intent_classifier import EmbeddingIntentClassifier
 from rasa.nlu.classifiers.keyword_intent_classifier import KeywordIntentClassifier
@@ -58,7 +58,7 @@ component_classes = [
     DucklingHTTPExtractor,
     EntitySynonymMapper,
     # featurizers
-    GloveFeaturizer,
+    # GloveFeaturizer,
     SpacyFeaturizer,
     MitieFeaturizer,
     NGramFeaturizer,

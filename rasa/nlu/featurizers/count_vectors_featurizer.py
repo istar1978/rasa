@@ -260,6 +260,7 @@ class CountVectorsFeaturizer(Featurizer):
 
         from sklearn.feature_extraction.text import CountVectorizer
 
+
         spacy_nlp = kwargs.get("spacy_nlp")
         if spacy_nlp is not None:
             # create spacy lemma_ for OOV_words
@@ -314,10 +315,16 @@ class CountVectorsFeaturizer(Featurizer):
         lem_resps = [self._get_message_response(example)
                      for example in training_data.intent_examples]
 
+        empty_resps = False
+        unique_resps = set(lem_resps)
+        if len(unique_resps) == 1 and next(iter(unique_resps)) == ' ':
+            empty_resps = True
+
         self._check_OOV_present(lem_ints)
         self._check_OOV_present(lem_resps)
 
         # noinspection PyPep8Naming
+        print(self.sequence,self.sparse, self.use_shared_vocab)
         try:
             if not self.sequence:
                 if self.use_shared_vocab:
@@ -328,12 +335,18 @@ class CountVectorsFeaturizer(Featurizer):
                 else:
                     X = self.vect[0].fit_transform(lem_exs)
                     Y_ints = self.vect[1].fit_transform(lem_ints)
-                    Y_resps = self.vect[1].fit_transform(lem_resps)
+
+                    if not empty_resps:
+                        Y_resps = self.vect[1].fit_transform(lem_resps)
+                    else:
+                        Y_resps = None
 
                 if not self.sparse:
                     X = X.toarray()
                     Y_ints = Y_ints.toarray()
-                    Y_resps = Y_resps.toarray()
+
+                    if Y_resps is not None:
+                        Y_resps = Y_resps.toarray()
                 else:
                     X.sort_indices()
                     Y_ints.sort_indices()
@@ -365,10 +378,12 @@ class CountVectorsFeaturizer(Featurizer):
                     self._combine_with_existing_text_features(example, X[i]),
                 )
             else:
+
                 example.set("text_features", X[i])
 
             example.set("intent_features", Y_ints[i])
-            example.set("response_features", Y_resps[i])
+            if Y_resps is not None:
+                example.set("response_features", Y_resps[i])
 
     def process(self, message: Message, **kwargs: Any) -> None:
         if self.vect is None:
