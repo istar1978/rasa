@@ -314,47 +314,61 @@ class CountVectorsFeaturizer(Featurizer):
         lem_resps = [self._get_message_response(example)
                      for example in training_data.intent_examples]
 
+        empty_resps = False
+        unique_resps = set(lem_resps)
+        if len(unique_resps) == 1 and next(iter(unique_resps)) == ' ':
+            empty_resps = True
+
         self._check_OOV_present(lem_ints)
         self._check_OOV_present(lem_resps)
 
         # noinspection PyPep8Naming
-        try:
-            if not self.sequence:
-                if self.use_shared_vocab:
-                    self.vect.fit(lem_exs + lem_ints + lem_resps)
-                    X = self.vect.transform(lem_exs)
-                    Y_ints = self.vect.transform(lem_ints)
-                    Y_resps = self.vect.transform(lem_resps)
-                else:
-                    X = self.vect[0].fit_transform(lem_exs)
-                    Y_ints = self.vect[1].fit_transform(lem_ints)
-                    Y_resps = self.vect[1].fit_transform(lem_resps)
+        # try:
+        if not self.sequence:
+            if self.use_shared_vocab:
+                self.vect.fit(lem_exs + lem_ints + lem_resps)
+                X = self.vect.transform(lem_exs)
+                Y_ints = self.vect.transform(lem_ints)
 
-                if not self.sparse:
-                    X = X.toarray()
-                    Y_ints = Y_ints.toarray()
-                    Y_resps = Y_resps.toarray()
+                if not empty_resps:
+                    Y_resps = self.vect.fit_transform(lem_resps)
                 else:
-                    X.sort_indices()
-                    Y_ints.sort_indices()
-                    Y_resps.sort_indices()
+                    Y_resps = None
 
             else:
-                if self.use_shared_vocab:
-                    self.vect.fit(lem_exs + lem_ints)
-                    X = self._create_sequence(self.vect, lem_exs)
-                    Y_ints = self._create_sequence(self.vect, lem_ints)
-                    Y_resps = self._create_sequence(self.vect, lem_resps)
+                X = self.vect[0].fit_transform(lem_exs)
+                Y_ints = self.vect[1].fit_transform(lem_ints)
+                if not empty_resps:
+                    Y_resps = self.vect[1].fit_transform(lem_resps)
                 else:
-                    self.vect[0].fit(lem_exs)
-                    X = self._create_sequence(self.vect[0], lem_exs)
-                    self.vect[1].fit(lem_ints + lem_resps)
-                    Y_ints = self._create_sequence(self.vect[1], lem_ints)
-                    Y_resps = self._create_sequence(self.vect[1], lem_resps)
+                    Y_resps = None
 
-        except ValueError:
-            self.vect = None
-            return
+            if not self.sparse:
+                X = X.toarray()
+                Y_ints = Y_ints.toarray()
+                if Y_resps is not None:
+                    Y_resps = Y_resps.toarray()
+            else:
+                X.sort_indices()
+                Y_ints.sort_indices()
+                Y_resps.sort_indices()
+
+        else:
+            if self.use_shared_vocab:
+                self.vect.fit(lem_exs + lem_ints)
+                X = self._create_sequence(self.vect, lem_exs)
+                Y_ints = self._create_sequence(self.vect, lem_ints)
+                Y_resps = self._create_sequence(self.vect, lem_resps)
+            else:
+                self.vect[0].fit(lem_exs)
+                X = self._create_sequence(self.vect[0], lem_exs)
+                self.vect[1].fit(lem_ints + lem_resps)
+                Y_ints = self._create_sequence(self.vect[1], lem_ints)
+                Y_resps = self._create_sequence(self.vect[1], lem_resps)
+
+        # except ValueError:
+        #     self.vect = None
+        #     return
 
         for i, example in enumerate(training_data.intent_examples):
             # create bag for each example
@@ -368,7 +382,8 @@ class CountVectorsFeaturizer(Featurizer):
                 example.set("text_features", X[i])
 
             example.set("intent_features", Y_ints[i])
-            example.set("response_features", Y_resps[i])
+            if Y_resps is not None:
+                example.set("response_features", Y_resps[i])
 
     def process(self, message: Message, **kwargs: Any) -> None:
         if self.vect is None:
