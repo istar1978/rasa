@@ -146,7 +146,7 @@ class EmbeddingIntentClassifier(Component):
         "validation_batch_size": 64,
 
         # tb summary dir
-        "summary_dir": './tb_logs'
+        "summary_dir": os.path.join(os.getcwd(),'tb_logs')
 
 
     }
