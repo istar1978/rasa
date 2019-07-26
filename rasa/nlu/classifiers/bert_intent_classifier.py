@@ -294,7 +294,7 @@ class BertIntentClassifier(Component):
         g = self.predict_fn.graph
         writer = tf.summary.FileWriter(logdir="tfgraph-bert-train-np", graph=g)
         writer.flush()
-        exit(0)
+        # exit(0)
 
         """
         Difference: Tom's weights have module/ wrapped around bert/ and these vars are added:
