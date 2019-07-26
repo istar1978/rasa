@@ -17,7 +17,7 @@ from rasa.importers.rasa import RasaFileImporter
 from rasa.importers.skill import SkillSelector
 
 # noinspection PyUnresolvedReferences
-from tests.core.conftest import project
+from tests.conftest import project
 
 
 async def test_use_of_interface():
