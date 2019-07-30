@@ -1054,12 +1054,23 @@ def dense_pruned(
             # pruning_layers.masked_fully_connected()
             with tf.variable_scope(name, reuse=tf.compat.v1.AUTO_REUSE) as dense_scope:
                 # print(dense_scope.name)
-                activation_accumulator = tf.get_variable(
+                neuron_rank_accumulator = tf.get_variable(
                     initializer=tf.zeros_initializer,
                     shape=[units],
                     trainable=False,
-                    name="activation_accumulator",
+                    name="neuron_rank_accumulator",
                 )
+                tf.get_default_graph().add_to_collection(
+                    "neuron_rank_accumulators", neuron_rank_accumulator
+                )
+                zeros = tf.zeros(shape=[units])
+                accumulator_reset_op = tf.assign(
+                    neuron_rank_accumulator, zeros, name="reset_neuron_rank_accumulator"
+                )
+                tf.get_default_graph().add_to_collection(
+                    "accumulators_reset", accumulator_reset_op
+                )
+                """
                 gradient_accumulator = tf.get_variable(
                     initializer=tf.zeros_initializer,
                     shape=[units],
@@ -1067,14 +1078,7 @@ def dense_pruned(
                     name="gradient_accumulator",
                 )
                 tf.get_default_graph().add_to_collection(
-                    "activation_accumulators", activation_accumulator
-                )
-                tf.get_default_graph().add_to_collection(
                     "gradient_accumulators", gradient_accumulator
-                )
-                zeros = tf.zeros(shape=[units])
-                activation_accumulator_reset_op = tf.assign(
-                    activation_accumulator, zeros, name="reset_activations_accumulator"
                 )
                 gradient_accumulator_reset_op = tf.assign(
                     gradient_accumulator, zeros, name="reset_gradients_accumulator"
@@ -1082,9 +1086,7 @@ def dense_pruned(
                 accumulator_reset_op = tf.group(
                     activation_accumulator_reset_op, gradient_accumulator_reset_op
                 )
-                tf.get_default_graph().add_to_collection(
-                    "accumulators_reset", accumulator_reset_op
-                )
+                """
 
                 """
                 Output of this dense is: inputs * weights, e.g. (128x768) * (768*768).
@@ -1097,7 +1099,12 @@ def dense_pruned(
                 matmul = tf.get_default_graph().get_tensor_by_name(
                     "{}/MatMul:0".format(scope)
                 )
+                tf.get_default_graph().add_to_collection(
+                    "pruning_activation_providers", matmul
+                )
                 # print(matmul.shape)
+
+                """
                 activations_per_neuron = tf.math.reduce_sum(matmul, axis=0)
                 # print(activations_per_neuron.shape)
                 activation_accumulator_update_op = tf.assign_add(
@@ -1108,13 +1115,13 @@ def dense_pruned(
                 tf.get_default_graph().add_to_collection(
                     "accumulators_update", activation_accumulator_update_op
                 )
+                """
 
-                weight_matrix = tf.get_variable(name="weights")
-                tf.get_default_graph().add_to_collection(
-                    "matrices_to_prune", weight_matrix
-                )
+                # weight_matrix = tf.get_variable(name="weights")
+                # tf.get_default_graph().add_to_collection(
+                #     "matrices_to_prune", weight_matrix
+                # )
                 # print(weight_matrix)
-
             return layer
 
 

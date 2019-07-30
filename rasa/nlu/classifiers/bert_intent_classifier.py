@@ -187,7 +187,7 @@ class BertIntentClassifier(Component):
         num_train_steps = int(len(train_examples) / self.batch_size * self.epochs)
         train_steps_per_epoch = int(len(train_examples) / self.batch_size)
         if self.epochs <= 0:
-            num_train_steps = 1
+            num_train_steps = 2
         print ("RUNNING {} EPOCHS, {} STEPS".format(self.epochs, num_train_steps))
         num_warmup_steps = int(num_train_steps * self.warmup_proportion)
 
@@ -281,6 +281,7 @@ class BertIntentClassifier(Component):
 
         # Start training
         self.estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
+        # exit(0)
 
         self.session = tf.Session(config=tf.ConfigProto(log_device_placement=True))
 
@@ -294,7 +295,6 @@ class BertIntentClassifier(Component):
         g = self.predict_fn.graph
         writer = tf.summary.FileWriter(logdir="tfgraph-bert-train-np", graph=g)
         writer.flush()
-        # exit(0)
 
         """
         Difference: Tom's weights have module/ wrapped around bert/ and these vars are added:
