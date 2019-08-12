@@ -366,7 +366,15 @@ def model_fn_builder(
                     # select K smallest neurons
                     # update the weight matrix by setting stuff to 0
 
-                    # prunable_vars = g.get_collection("matrices_to_prune")
+                    def train_formatter(stats):
+                        s = "accuracy = {:.4f}, loss = {:.5f}, sparsity = {:.3f}, train_step = {}".format(
+                            stats["accuracy"],
+                            stats["loss"],
+                            stats["sparsity"],
+                            stats["train_step"],
+                        )
+                        return s
+
                     pruning_activations = g.get_collection(
                         "pruning_activation_providers"
                     )
@@ -375,11 +383,8 @@ def model_fn_builder(
                             loss, pruning_activations, name="gradients_for_pruning"
                         )
 
-                        # grad_accumulators = g.get_collection("gradient_accumulators")
                         for gradient, activation in zip(grads, pruning_activations):
                             scope = "/".join(activation.name.split("/")[:-1])
-                            # activation_name = scope + "/MatMul:0"
-                            # activation = g.get_tensor_by_name(activation_name)
                             neuron_rank_accumulator_name = (
                                 scope + "/neuron_rank_accumulator:0"
                             )
@@ -388,20 +393,10 @@ def model_fn_builder(
                                 for v in g.get_collection("neuron_rank_accumulators")
                                 if v.name == neuron_rank_accumulator_name
                             ][0]
-                            # print(neuron_rank_accumulator)
 
-                            # print("Shapes: eq={}, act {}, grad {} ({})".format(activation.shape == gradient.shape, activation.shape, gradient.shape, scope))
                             with tf.name_scope(scope + "/rank"):
                                 local_rank = tf.multiply(gradient, activation)
-                                local_rank = tf.math.reduce_mean(
-                                    local_rank,
-                                    axis=0,
-                                    # keepdims=None,
-                                    # name=None,
-                                    # reduction_indices=None,
-                                    # keep_dims=None
-                                )
-                                # print("Local rank: {}".format(local_rank.shape))
+                                local_rank = tf.math.reduce_mean(local_rank, axis=0)
                                 neuron_rank_accumulator_update_op = tf.assign_add(
                                     neuron_rank_accumulator,
                                     local_rank,
@@ -412,42 +407,6 @@ def model_fn_builder(
                                     neuron_rank_accumulator_update_op,
                                 )
 
-                            #     grad_accumulator_update_op = tf.assign_add(
-                            #         grad_accumulator,
-                            #         grads_per_neuron,
-                            #         name="gradient_accumulator_update",
-                            #     )
-                            # g.add_to_collection(
-                            #     "accumulators_update", grad_accumulator_update_op
-                            # )
-
-                            # exit(0)
-
-                        # for grad, var in zip(grads, prunable_vars):
-                        #     scope = "/".join(var.name.split("/")[:-1])
-                        #     grad_accumulator_name = scope + "/gradient_accumulator:0"
-                        #     grad_accumulator = [
-                        #         a
-                        #         for a in grad_accumulators
-                        #         if a.name == grad_accumulator_name
-                        #     ][0]
-                        #     grads_per_neuron = tf.math.reduce_sum(grad, axis=0)
-                        #     with tf.name_scope(scope):
-                        #         grad_accumulator_update_op = tf.assign_add(
-                        #             grad_accumulator,
-                        #             grads_per_neuron,
-                        #             name="gradient_accumulator_update",
-                        #         )
-                        #     g.add_to_collection(
-                        #         "accumulators_update", grad_accumulator_update_op
-                        #     )
-
-                        """
-                        for gkey in ['accumulators_reset', 'accumulators_update', "matrices_to_prune"]:
-                            print("##### {} #####".format(gkey))
-                            [print(v) for v in g.get_collection(gkey)]
-                        """
-                        # exit(0)
                         update_accumulators_op = tf.group(
                             g.get_collection("neuron_rank_accumulators_update"),
                             name="all_accumulators_update_op",
@@ -466,35 +425,35 @@ def model_fn_builder(
                             ),
                         )
 
-                        logging_hook = tf.train.LoggingTensorHook(
-                            {
-                                "loss": loss,
-                                "accuracy": accuracy[1],
-                                "training_step": tf.train.get_global_step(),
-                            },
-                            every_n_iter=1,
-                        )
-
                         writer = tf.summary.FileWriter(
                             logdir="tfgraph-bert-raw-train-np", graph=g
                         )
                         writer.flush()
+                        # exit(0)
 
                         with tf.control_dependencies([train_op]):
-                            # tf.logging.info("##### Doing training step...#####")
                             with tf.control_dependencies([update_accumulators_op]):
-                                # tf.logging.info("##### Updating accumulators...#####")
                                 mp_hparams = pruning_hparams(
                                     params["sparsification_params"]
                                 )
-                                p = neuron_pruning.Pruning(
+                                pruning = neuron_pruning.Pruning(
                                     mp_hparams,
                                     global_step=tf.train.get_global_step(),
                                     neuron_rank_accumulators_reset="accumulators_reset",
                                 )
-                                mask_update_op = p.conditional_mask_update_op()
+                                mask_update_op = pruning.conditional_mask_update_op()
                                 train_op = mask_update_op
-                        # exit(0)
+
+                        logging_hook = tf.train.LoggingTensorHook(
+                            {
+                                "loss": loss,
+                                "accuracy": accuracy[1],
+                                "train_step": tf.train.get_global_step(),
+                                "sparsity": pruning._get_sparsity(),
+                            },
+                            every_n_iter=1,
+                            formatter=train_formatter,
+                        )
                 else:
                     train_op = create_optimizer(
                         loss,

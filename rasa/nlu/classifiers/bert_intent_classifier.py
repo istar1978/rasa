@@ -186,8 +186,9 @@ class BertIntentClassifier(Component):
         train_examples = get_train_examples(training_data.training_examples)
         num_train_steps = int(len(train_examples) / self.batch_size * self.epochs)
         train_steps_per_epoch = int(len(train_examples) / self.batch_size)
+        min_steps = 3
         if self.epochs <= 0:
-            num_train_steps = 2
+            num_train_steps = min_steps
         print ("RUNNING {} EPOCHS, {} STEPS".format(self.epochs, num_train_steps))
         num_warmup_steps = int(num_train_steps * self.warmup_proportion)
 
@@ -244,7 +245,10 @@ class BertIntentClassifier(Component):
         end_pruning_step = max(
             train_steps_per_epoch * self.end_pruning_epoch, begin_pruning_step + 1
         )
-        print (
+        if self.epochs <= 0:
+            end_pruning_step = begin_pruning_step + min_steps
+
+        logger.info(
             "Begin pruning: {}, end: {}".format(begin_pruning_step, end_pruning_step)
         )
 

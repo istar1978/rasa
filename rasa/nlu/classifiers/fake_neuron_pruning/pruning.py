@@ -157,7 +157,6 @@ def get_weight_sparsity():
     return [nn_impl.zero_fraction(mask) for mask in masks]
 
 
-# TODO: change to support neuron pruning params
 def get_pruning_hparams():
     """Get a tf.HParams object with the default values for the hyperparameters.
 
@@ -236,7 +235,6 @@ def get_pruning_hparams():
     )
 
 
-# TODO: change to operate over all variables at once, not separately for each variable
 class Pruning(object):
     def __init__(
         self,
@@ -413,139 +411,135 @@ class Pruning(object):
                 math_ops.div(target_sparsity[0], self._spec.target_sparsity),
             )
 
-    # TODO: change updating for neuron pruning:
-    # - fetch activations and grads for all variables
-    # - do pointwise multiply and create one big ranking (concat rankings for all variables)
-    # - determine the threshold value (by using top-k)
-    # - step through each variable, compare neuron scores with threshold, update the masks
-    def _update_mask(self, weights, threshold):
-        """Updates the mask for a given weight tensor.
+    # def _update_mask(self, weights, threshold):
+    #      """Updates the mask for a given weight tensor.
 
-        This functions first computes the cdf of the weight tensor, and estimates
-        the threshold value such that 'desired_sparsity' fraction of weights
-        have magnitude less than the threshold.
+    #      This functions first computes the cdf of the weight tensor, and estimates
+    #      the threshold value such that 'desired_sparsity' fraction of weights
+    #      have magnitude less than the threshold.
 
-        Args:
-          weights: The weight tensor that needs to be masked.
-          threshold: The current threshold value. The function will compute a new
-            threshold and return the exponential moving average using the current
-            value of threshold
+    #      Args:
+    #        weights: The weight tensor that needs to be masked.
+    #        threshold: The current threshold value. The function will compute a new
+    #          threshold and return the exponential moving average using the current
+    #          value of threshold
 
-        Returns:
-          new_threshold: The new value of the threshold based on weights, and
-            sparsity at the current global_step
-          new_mask: A numpy array of the same size and shape as weights containing
-            0 or 1 to indicate which of the values in weights falls below
-            the threshold
+    #      Returns:
+    #        new_threshold: The new value of the threshold based on weights, and
+    #          sparsity at the current global_step
+    #        new_mask: A numpy array of the same size and shape as weights containing
+    #          0 or 1 to indicate which of the values in weights falls below
+    #          the threshold
 
-        Raises:
-          ValueError: if sparsity is not defined
-        """
-        if self._sparsity is None:
-            raise ValueError("Sparsity variable undefined")
+    #      Raises:
+    #        ValueError: if sparsity is not defined
+    #      """
+    #      if self._sparsity is None:
+    #          raise ValueError("Sparsity variable undefined")
 
-        sparsity = self._get_sparsity(weights.op.name)
-        with ops.name_scope(weights.op.name + "_pruning_ops"):
-            abs_weights = math_ops.abs(weights)
-            k = math_ops.cast(
-                math_ops.round(
-                    math_ops.cast(array_ops.size(abs_weights), dtypes.float32)
-                    * (1 - sparsity)
-                ),
-                dtypes.int32,
-            )
-            # Sort the entire array
-            values, _ = nn_ops.top_k(
-                array_ops.reshape(abs_weights, [-1]), k=array_ops.size(abs_weights)
-            )
-            # Grab the (k-1) th value
-            current_threshold = array_ops.gather(values, k - 1)
-            smoothed_threshold = math_ops.add_n(
-                [
-                    math_ops.multiply(
-                        current_threshold, 1 - self._spec.threshold_decay
-                    ),
-                    math_ops.multiply(threshold, self._spec.threshold_decay),
-                ]
-            )
+    #      sparsity = self._get_sparsity(weights.op.name)
+    #      with tf.name_scope(weights.op.name + "_pruning_ops"):
+    #          abs_weights = tf.abs(weights)
+    #          k = tf.cast(
+    #              tf.round(
+    #                  tf.cast(tf.size(abs_weights), tf.float32)
+    #                  * (1 - sparsity)
+    #              ),
+    #              tf.int32,
+    #          )
+    #          # Sort the entire array
+    #          values, _ = tf.nn.top_k(
+    #              tf.reshape(abs_weights, [-1]), k=tf.size(abs_weights)
+    #          )
+    #          # Grab the (k-1) th value
+    #          current_threshold = tf.gather(values, k - 1)
+    #          smoothed_threshold = tf.add_n(
+    #              [
+    #                  tf.multiply(
+    #                      current_threshold, 1 - self._spec.threshold_decay
+    #                  ),
+    #                  tf.multiply(threshold, self._spec.threshold_decay),
+    #              ]
+    #          )
 
-            new_mask = math_ops.cast(
-                math_ops.greater_equal(abs_weights, smoothed_threshold), dtypes.float32
-            )
+    #          new_mask = tf.cast(
+    #              tf.greater_equal(abs_weights, smoothed_threshold), tf.float32
+    #          )
 
-        return smoothed_threshold, new_mask
+    #      return smoothed_threshold, new_mask
 
-    def _maybe_update_block_mask(self, weights, threshold):
-        """Performs block-granular masking of the weights.
+    # def _maybe_update_block_mask(self, weights, threshold):
+    #     """Performs block-granular masking of the weights.
 
-        Block pruning occurs only if the block_height or block_width is > 1 and
-        if the weight tensor, when squeezed, has ndims = 2. Otherwise, elementwise
-        pruning occurs.
-        Args:
-          weights: The weight tensor that needs to be masked.
-          threshold: The current threshold value. The function will compute a new
-            threshold and return the exponential moving average using the current
-            value of threshold
+    #     Block pruning occurs only if the block_height or block_width is > 1 and
+    #     if the weight tensor, when squeezed, has ndims = 2. Otherwise, elementwise
+    #     pruning occurs.
+    #     Args:
+    #       weights: The weight tensor that needs to be masked.
+    #       threshold: The current threshold value. The function will compute a new
+    #         threshold and return the exponential moving average using the current
+    #         value of threshold
 
-        Returns:
-          new_threshold: The new value of the threshold based on weights, and
-            sparsity at the current global_step
-          new_mask: A numpy array of the same size and shape as weights containing
-            0 or 1 to indicate which of the values in weights falls below
-            the threshold
+    #     Returns:
+    #       new_threshold: The new value of the threshold based on weights, and
+    #         sparsity at the current global_step
+    #       new_mask: A numpy array of the same size and shape as weights containing
+    #         0 or 1 to indicate which of the values in weights falls below
+    #         the threshold
 
-        Raises:
-          ValueError: if block pooling function is not AVG or MAX
-        """
-        squeezed_weights = array_ops.squeeze(weights)
-        if squeezed_weights.get_shape().ndims != 2 or self._block_dim == [1, 1]:
-            return self._update_mask(weights, threshold)
+    #     Raises:
+    #       ValueError: if block pooling function is not AVG or MAX
+    #     """
+    #     squeezed_weights = array_ops.squeeze(weights)
+    #     if squeezed_weights.get_shape().ndims != 2 or self._block_dim == [1, 1]:
+    #         return self._update_mask(weights, threshold)
+    #     ## neuron pruning returns here and doesn't use the rest of this function
 
-        if self._block_pooling_function not in ["AVG", "MAX"]:
-            raise ValueError(
-                "Unknown pooling function for block sparsity: %s"
-                % self._block_pooling_function
-            )
+    #     if self._block_pooling_function not in ["AVG", "MAX"]:
+    #         raise ValueError(
+    #             "Unknown pooling function for block sparsity: %s"
+    #             % self._block_pooling_function
+    #         )
 
-        with ops.name_scope(weights.op.name + "_pruning_ops"):
-            abs_weights = math_ops.abs(squeezed_weights)
+    #     with ops.name_scope(weights.op.name + "_pruning_ops"):
+    #         abs_weights = math_ops.abs(squeezed_weights)
 
-            pool_window = [self._block_dim[0], self._block_dim[1]]
-            pool_fn = pruning_utils.factorized_pool
-            squeeze_axis = None
-            if not self._spec.use_tpu:
-                pool_fn = nn_ops.pool
-                abs_weights = array_ops.reshape(
-                    abs_weights,
-                    [1, abs_weights.get_shape()[0], abs_weights.get_shape()[1], 1],
-                )
-                squeeze_axis = [0, 3]
+    #         pool_window = [self._block_dim[0], self._block_dim[1]]
+    #         pool_fn = pruning_utils.factorized_pool
+    #         squeeze_axis = None
+    #         if not self._spec.use_tpu:
+    #             pool_fn = nn_ops.pool
+    #             abs_weights = array_ops.reshape(
+    #                 abs_weights,
+    #                 [1, abs_weights.get_shape()[0], abs_weights.get_shape()[1], 1],
+    #             )
+    #             squeeze_axis = [0, 3]
 
-            pooled_weights = pool_fn(
-                abs_weights,
-                window_shape=pool_window,
-                pooling_type=self._block_pooling_function,
-                strides=pool_window,
-                padding="SAME",
-                name=weights.op.name + "_pooled",
-            )
+    #         pooled_weights = pool_fn(
+    #             abs_weights,
+    #             window_shape=pool_window,
+    #             pooling_type=self._block_pooling_function,
+    #             strides=pool_window,
+    #             padding="SAME",
+    #             name=weights.op.name + "_pooled",
+    #         )
 
-            if pooled_weights.get_shape().ndims != 2:
-                pooled_weights = array_ops.squeeze(pooled_weights, axis=squeeze_axis)
+    #         if pooled_weights.get_shape().ndims != 2:
+    #             pooled_weights = array_ops.squeeze(pooled_weights, axis=squeeze_axis)
 
-            smoothed_threshold, new_mask = self._update_mask(pooled_weights, threshold)
+    #         smoothed_threshold, new_mask = self._update_mask(pooled_weights, threshold)
 
-            updated_mask = pruning_utils.expand_tensor(new_mask, self._block_dim)
-            sliced_mask = array_ops.slice(
-                updated_mask,
-                [0, 0],
-                [squeezed_weights.get_shape()[0], squeezed_weights.get_shape()[1]],
-            )
+    #         updated_mask = pruning_utils.expand_tensor(new_mask, self._block_dim)
+    #         sliced_mask = array_ops.slice(
+    #             updated_mask,
+    #             [0, 0],
+    #             [squeezed_weights.get_shape()[0], squeezed_weights.get_shape()[1]],
+    #         )
 
-        return (
-            smoothed_threshold,
-            array_ops.reshape(sliced_mask, array_ops.shape(weights)),
-        )
+    #     return (
+    #         smoothed_threshold,
+    #         array_ops.reshape(sliced_mask, array_ops.shape(weights)),
+    #     )
 
     def _get_mask_assign_ops(self):
         # Make sure the assignment ops have not already been added to the list
@@ -558,8 +552,6 @@ class Pruning(object):
         weights = get_weights()
         thresholds = get_thresholds()
         neuron_rank_accumulators = get_neuron_rank_accumulators()
-        # grad_accumulators = get_grad_accumulators()
-        # activation_accumulators = get_activation_accumulators()
 
         if len(masks) != len(thresholds):
             raise ValueError(
@@ -572,32 +564,17 @@ class Pruning(object):
         for i, weight in enumerate(weights):
             mask = masks[i]
             name = weight.name
-            logging.info("Weight: {}".format(name))
             scope_pieces = name.split("/")[:-1]
             scope = "/".join(scope_pieces)
+
             rank_accumulator = [
                 a
                 for a in neuron_rank_accumulators
                 if a.name.split("/")[:-1] == scope_pieces
             ][0]
-            logging.info(rank_accumulator)
 
-            # grads = [g for g in grad_accumulators if g.name.split("/")[:-1] == scope_pieces]
-            # logging.info(grads)
-            # a = activations[0]
-            # g = grads[0]
             with tf.name_scope(scope):
-                # logging.info(local_rank.shape)
-                # logging.info("Weight shape: {}, mask shape: {}".format(weight.shape, mask.shape))
-                rank_mask = tf.reduce_max(
-                    mask,
-                    axis=0,
-                    # keepdims=None,
-                    name="select_unpruned_neurons",
-                    # reduction_indices=None,
-                    # keep_dims=None
-                )
-                # logging.info(rank_mask.shape)
+                rank_mask = tf.reduce_max(mask, axis=0, name="select_unpruned_neurons")
                 local_rank = tf.multiply(
                     rank_accumulator, rank_mask, name="rank_ignore_pruned"
                 )
@@ -606,47 +583,21 @@ class Pruning(object):
                 local_rank = tf.abs(rank_accumulator)
                 local_rank = tf.divide(local_rank, tf.norm(local_rank))
 
-                # v = torch.abs(self.filter_ranks[i])
-                # v = v / np.sqrt(torch.sum(v * v))
-
-                # values = \
-                #     values / (activation.size(0) * activation.size(2) * activation.size(3))
-
                 local_ranks.append(local_rank)
-        # exit(0)
 
         # concatenate local ranks into an overall one, get top k and determine the threshold
         global_rank = tf.concat(local_ranks, axis=0, name="global_rank")
-        # logging.info("global rank {}".format(global_rank))
-
-        # logging.info(tf.get_default_graph().get_name_scope())
-        # logging.info(tf.get_name_scope())
-        # exit(0)
-
         sparsity = self._get_sparsity()
-        # with ops.name_scope(weights.op.name + "_pruning_ops"):
-        # abs_weights = math_ops.abs(weights)
+
         k = tf.cast(
             tf.round(tf.cast(tf.size(global_rank), tf.float32) * (1 - sparsity)),
             tf.int32,
         )
         # Sort the entire array
         values, _ = tf.math.top_k(global_rank, k=(k - 1))
-        # logging.info("K top neurons: {}".format(values))
-        # Grab the (k-1) th value
-        # current_threshold = tf.gather(values, k - 1)
-        new_threshold = values[-1]
-        # logging.info("New threshold: {}".format(new_threshold))
-        # smoothed_threshold = math_ops.add_n(
-        #     [
-        #         math_ops.multiply(
-        #             current_threshold, 1 - self._spec.threshold_decay
-        #         ),
-        #         math_ops.multiply(threshold, self._spec.threshold_decay),
-        #     ]
-        # )
 
-        # exit(0)
+        # Grab the (k-1) th value
+        new_threshold = values[-1]
 
         for i, weight in enumerate(weights):
             threshold = thresholds[i]
@@ -654,55 +605,35 @@ class Pruning(object):
             local_rank = local_ranks[i]
 
             new_mask_flat = tf.cast(
-                tf.greater_equal(local_rank, new_threshold), dtypes.float32
+                tf.greater_equal(local_rank, new_threshold), tf.float32
             )
-            # logging.info("New mask flat: {}".format(new_mask_flat))
-            # logging.info("Weight shape: {}".format(weight.shape))
             new_mask_full_flat = tf.tile(new_mask_flat, multiples=[weight.shape[0]])
             new_mask_full = tf.reshape(new_mask_full_flat, shape=weight.shape)
-            # logging.info("New mask full: {}".format(new_mask_full))
 
-            # is_partitioned = isinstance(weight, variables.PartitionedVariable)
-            # if is_partitioned:
-            #     weight = weight.as_tensor()
-
-            # new_threshold, new_mask = self._maybe_update_block_mask(weight, new_threshold)
             self._assign_ops.append(
                 pruning_utils.variable_assign(threshold, new_threshold)
             )
 
-            self._assign_ops.append(
-                # pruning_utils.partitioned_variable_assign(mask, new_mask)
-                # if is_partitioned
-                # else
-                pruning_utils.variable_assign(mask, new_mask_full)
-            )
+            self._assign_ops.append(pruning_utils.variable_assign(mask, new_mask_full))
 
     def mask_update_op(self):
-        with ops.name_scope(self._spec.name):
+        with tf.name_scope(self._spec.name):
             if not self._assign_ops:
                 self._get_mask_assign_ops()  # this creates the actual mask update ops
-            with ops.control_dependencies(
+            with tf.control_dependencies(
                 [
-                    state_ops.assign(
+                    tf.assign(
                         self._last_update_step,
                         self._global_step,
                         name="last_mask_update_step_assign",
                     )
                 ]
             ):
-                # logging.info("##### Updating last update step ####.")
-                with ops.control_dependencies(
-                    self._assign_ops
-                ):  # this makes sure the mask update ops run whenever needed
-                    logging.info("##### Updating masks ####.")
-                    with ops.control_dependencies(
+                with tf.control_dependencies(self._assign_ops):
+                    with tf.control_dependencies(
                         self.neuron_rank_accumulators_reset_ops
                     ):
-                        logging.info(
-                            "##### Resetting the neuron rank accumulators ####."
-                        )
-                        return control_flow_ops.no_op("mask_update")
+                        return tf.no_op("mask_update")
 
     def conditional_mask_update_op(self):
         def maybe_update_masks():

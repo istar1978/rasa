@@ -960,9 +960,9 @@ def transformer_model(
 
 
 # replacement for tf.layers.dense which supports pruning
-# NOTE: if weightPruning is used, what is 'kernel' and 'bias' in the graph of tf.layers.dense,
-# becomed 'weights' and 'biases' in the graph of dense_pruned. This originates from
-# tf.contrib.model_pruning.masked_fully_connected
+# NOTE: if weight or neuron pruning is used, what is 'kernel' and 'bias' in the graph
+# of tf.layers.dense, becomes 'weights' and 'biases' in the graph of dense_pruned.
+# This originates from tf.contrib.model_pruning.masked_fully_connected
 def dense_pruned(
     x,
     units,
@@ -1053,7 +1053,6 @@ def dense_pruned(
             # use the same scope as the one in which the weight matrix is created when calling
             # pruning_layers.masked_fully_connected()
             with tf.variable_scope(name, reuse=tf.compat.v1.AUTO_REUSE) as dense_scope:
-                # print(dense_scope.name)
                 neuron_rank_accumulator = tf.get_variable(
                     initializer=tf.zeros_initializer,
                     shape=[units],
@@ -1070,23 +1069,6 @@ def dense_pruned(
                 tf.get_default_graph().add_to_collection(
                     "accumulators_reset", accumulator_reset_op
                 )
-                """
-                gradient_accumulator = tf.get_variable(
-                    initializer=tf.zeros_initializer,
-                    shape=[units],
-                    trainable=False,
-                    name="gradient_accumulator",
-                )
-                tf.get_default_graph().add_to_collection(
-                    "gradient_accumulators", gradient_accumulator
-                )
-                gradient_accumulator_reset_op = tf.assign(
-                    gradient_accumulator, zeros, name="reset_gradients_accumulator"
-                )
-                accumulator_reset_op = tf.group(
-                    activation_accumulator_reset_op, gradient_accumulator_reset_op
-                )
-                """
 
                 """
                 Output of this dense is: inputs * weights, e.g. (128x768) * (768*768).
@@ -1095,33 +1077,13 @@ def dense_pruned(
                 (along axis 0) to get neuron-level scores.
                 """
                 scope = tf.get_variable_scope().name
-                # print(scope)
                 matmul = tf.get_default_graph().get_tensor_by_name(
-                    "{}/MatMul:0".format(scope)
+                    "{}/BiasAdd:0".format(scope)
                 )
                 tf.get_default_graph().add_to_collection(
                     "pruning_activation_providers", matmul
                 )
-                # print(matmul.shape)
 
-                """
-                activations_per_neuron = tf.math.reduce_sum(matmul, axis=0)
-                # print(activations_per_neuron.shape)
-                activation_accumulator_update_op = tf.assign_add(
-                    activation_accumulator,
-                    activations_per_neuron,
-                    name="activation_accumulator_update",
-                )
-                tf.get_default_graph().add_to_collection(
-                    "accumulators_update", activation_accumulator_update_op
-                )
-                """
-
-                # weight_matrix = tf.get_variable(name="weights")
-                # tf.get_default_graph().add_to_collection(
-                #     "matrices_to_prune", weight_matrix
-                # )
-                # print(weight_matrix)
             return layer
 
 
