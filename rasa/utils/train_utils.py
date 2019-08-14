@@ -610,6 +610,7 @@ def tf_loss_softmax(
     sim_neg_bot_dial: "tf.Tensor",
     mask: Optional["tf.Tensor"],
     scale_loss: bool,
+    loss_type: Text,
 ) -> "tf.Tensor":
     """Define softmax loss."""
 
@@ -638,9 +639,11 @@ def tf_loss_softmax(
             pos_pred = pred[:, 0]
         mask *= tf.pow((1 - pos_pred) / 0.5, 4)
 
-    # loss = entmax15_loss_with_logits(tf.reshape(labels, (-1, tf.shape(labels)[-1])), tf.reshape(logits, (-1, tf.shape(logits)[-1])))#, mask)
-    loss = entmax15_loss_with_logits(labels, logits)
-    loss = tf.losses.compute_weighted_loss(loss, mask)
+    if loss_type == "entmax":
+        loss = entmax15_loss_with_logits(labels, logits)
+        loss = tf.losses.compute_weighted_loss(loss, mask)
+    else:
+        loss = tf.losses.softmax_cross_entropy(labels, logits, mask)
     # add regularization losses
     loss += tf.losses.get_regularization_loss()
 
@@ -677,7 +680,7 @@ def choose_loss(
             use_max_sim_neg,
             C_emb,
         )
-    elif loss_type == "softmax":
+    elif loss_type in {"softmax", "entmax"}:
         return tf_loss_softmax(
             sim_pos,
             sim_neg,
@@ -686,6 +689,7 @@ def choose_loss(
             sim_neg_bot_dial,
             mask,
             scale_loss,
+            loss_type,
         )
     else:
         raise ValueError(
