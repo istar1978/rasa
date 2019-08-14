@@ -146,6 +146,7 @@ class BertModel(object):
         use_one_hot_embeddings=True,
         scope=None,
         sparsity_technique="weight_pruning",
+        trained_np_masks=None,
     ):
         """Constructor for BertModel.
 
@@ -176,6 +177,7 @@ class BertModel(object):
         seq_length = input_shape[1]
 
         self.sparsity_technique = sparsity_technique
+        self.trained_np_masks = trained_np_masks
 
         if input_mask is None:
             input_mask = tf.ones(shape=[batch_size, seq_length], dtype=tf.int32)
@@ -233,6 +235,7 @@ class BertModel(object):
                     initializer_range=config.initializer_range,
                     do_return_all_layers=True,
                     sparsity_technique=self.sparsity_technique,
+                    trained_np_masks=self.trained_np_masks,
                 )
 
             self.sequence_output = self.all_encoder_layers[-1]
@@ -251,6 +254,7 @@ class BertModel(object):
                     activation=tf.tanh,
                     kernel_initializer=create_initializer(config.initializer_range),
                     sparsity_technique=self.sparsity_technique,
+                    trained_np_masks=self.trained_np_masks,
                 )
 
     def get_pooled_output(self):
@@ -603,6 +607,7 @@ def attention_layer(
     from_seq_length=None,
     to_seq_length=None,
     sparsity_technique="weight_pruning",
+    trained_np_masks=None,
 ):
     """Performs multi-headed attention from `from_tensor` to `to_tensor`.
 
@@ -711,6 +716,7 @@ def attention_layer(
         name="query",
         kernel_initializer=create_initializer(initializer_range),
         sparsity_technique=sparsity_technique,
+        trained_np_masks=trained_np_masks,
     )
 
     # `key_layer` = [B*T, N*H]
@@ -721,6 +727,7 @@ def attention_layer(
         name="key",
         kernel_initializer=create_initializer(initializer_range),
         sparsity_technique=sparsity_technique,
+        trained_np_masks=trained_np_masks,
     )
 
     # `value_layer` = [B*T, N*H]
@@ -731,6 +738,7 @@ def attention_layer(
         name="value",
         kernel_initializer=create_initializer(initializer_range),
         sparsity_technique=sparsity_technique,
+        trained_np_masks=trained_np_masks,
     )
 
     # `query_layer` = [B, N, F, H]
@@ -817,6 +825,7 @@ def transformer_model(
     initializer_range=0.02,
     do_return_all_layers=False,
     sparsity_technique="weight_pruning",
+    trained_np_masks=None,
 ):
     """Multi-headed, multi-layer Transformer from "Attention is All You Need".
 
@@ -902,6 +911,7 @@ def transformer_model(
                         from_seq_length=seq_length,
                         to_seq_length=seq_length,
                         sparsity_technique=sparsity_technique,
+                        trained_np_masks=trained_np_masks,
                     )
                     attention_heads.append(attention_head)
 
@@ -921,6 +931,7 @@ def transformer_model(
                         hidden_size,
                         kernel_initializer=create_initializer(initializer_range),
                         sparsity_technique=sparsity_technique,
+                        trained_np_masks=trained_np_masks,
                     )
                     attention_output = dropout(attention_output, hidden_dropout_prob)
                     attention_output = layer_norm(attention_output + layer_input)
@@ -933,6 +944,7 @@ def transformer_model(
                     activation=intermediate_act_fn,
                     kernel_initializer=create_initializer(initializer_range),
                     sparsity_technique=sparsity_technique,
+                    trained_np_masks=trained_np_masks,
                 )
 
             # Down-project back to `hidden_size` then add the residual.
@@ -942,6 +954,7 @@ def transformer_model(
                     hidden_size,
                     kernel_initializer=create_initializer(initializer_range),
                     sparsity_technique=sparsity_technique,
+                    trained_np_masks=trained_np_masks,
                 )
                 layer_output = dropout(layer_output, hidden_dropout_prob)
                 layer_output = layer_norm(layer_output + attention_output)
@@ -974,6 +987,7 @@ def dense_pruned(
     dtype=tf.float32,
     name="dense",
     initial_sparsity=None,
+    trained_np_masks=None,
 ):
     """Matmul & bias add that supports broadcasting for batched gemm.
 

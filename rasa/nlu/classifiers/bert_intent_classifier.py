@@ -257,7 +257,8 @@ class BertIntentClassifier(Component):
                 "end_pruning_step": end_pruning_step,
                 "pruning_frequency": self.pruning_frequency_steps,
                 "target_sparsity": self.target_sparsity,
-                # "load_masks_from": self.load_pruning_masks_from,
+                "resize_pruned_matrices": True,
+                "checkpoint_for_pruning_masks": self.warm_start_checkpoint,
             },
             "finetune_hat_only": self.finetune_hat_only,
         }

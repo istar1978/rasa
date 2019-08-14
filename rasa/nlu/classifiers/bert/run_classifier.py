@@ -19,6 +19,7 @@ from __future__ import division
 from __future__ import print_function
 
 import re
+import numpy as np
 from rasa.nlu.classifiers.bert.optimization import create_optimizer
 from rasa.nlu.classifiers.bert.tokenization import convert_to_unicode, FullTokenizer
 from rasa.nlu.classifiers.bert.modeling import BertModel
@@ -246,7 +247,14 @@ def check_global_sparsity():
 
 
 def build_sparsity_map(
-    graph, keys=0.5, queries=0.5, values=0.5, intermediates=0.5, outputs=0.5, pooler=0.5
+    graph,
+    keys=0.5,
+    queries=0.5,
+    values=0.5,
+    att_outputs=0.5,
+    intermediates=0.5,
+    outputs=0.5,
+    pooler=0.5,
 ):
     weights = graph.get_collection(core.WEIGHT_COLLECTION)
     sparsity_map = {}
@@ -258,9 +266,11 @@ def build_sparsity_map(
             sparsity = queries
         elif "/value/weights" in w.name:
             sparsity = values
+        elif "/attention/output/dense/weights" in w.name:
+            sparsity = att_outputs
         elif "/intermediate/dense/weights" in w.name:
             sparsity = intermediates
-        elif "/output/dense/weights" in w.name:
+        elif "/output/dense/weights" in w.name and "attention" not in w.name:
             sparsity = outputs
         elif "/pooler/dense/weights" in w.name:
             sparsity = pooler
@@ -269,6 +279,25 @@ def build_sparsity_map(
         sparsity_map[w.name] = sparsity
 
     return sparsity_map
+
+
+def load_pruning_masks_from_ckpt(ckpt_name):
+    ckpt_reader = tf.train.NewCheckpointReader(ckpt_name)
+    all_names = ckpt_reader.get_variable_to_shape_map().keys()
+    mask_names = [n for n in all_names if n.endswith("/mask")]
+    mask_names.sort()
+    mask_dict = {}
+
+    for mask_name in mask_names:
+        mask = ckpt_reader.get_tensor(mask_name)
+        scope = "/".join(mask_name.split("/")[:-1])
+        mask_squashed = np.amax(mask, axis=0)
+        nonzero = np.count_nonzero(mask_squashed)
+        sparsity = 1 - (nonzero / len(mask_squashed))
+        mask_dict[scope] = mask_squashed
+        print ("{}: {:.1f}% sparsity".format(scope, 100 * sparsity))
+
+    return mask_dict
 
 
 def pruning_hparams(hparams):  # pylint: disable=unused-argument
@@ -314,6 +343,21 @@ def model_fn_builder(
 
         is_predicting = mode == tf.estimator.ModeKeys.PREDICT
         if not is_predicting:
+            masks_dict = None
+            if (
+                params["sparsity_technique"] == "neuron_pruning"
+                and params["sparsification_params"]["resize_pruned_matrices"]
+            ):
+                # get a var: mask dict from checkpoint
+                masks_ckpt = params["sparsification_params"][
+                    "checkpoint_for_pruning_masks"
+                ]
+                if masks_ckpt is None:
+                    raise ValueError(
+                        "You are trying to resize pruned weight matrices but haven't provided a checkpoint to take the masks from!"
+                    )
+                masks_dict = load_pruning_masks_from_ckpt(ckpt_name=masks_ckpt)
+
             g = tf.get_default_graph()
             (loss, predicted_labels, log_probs) = create_model(
                 is_predicting,
@@ -325,7 +369,9 @@ def model_fn_builder(
                 bert_tfhub_module_handle,
                 bert_config,
                 sparsity_technique=params["sparsity_technique"],
+                trained_masks=masks_dict,
             )
+            exit(0)
 
             accuracy = tf.metrics.accuracy(label_ids, predicted_labels)
             logging_hook = tf.train.LoggingTensorHook(
@@ -457,11 +503,13 @@ def model_fn_builder(
                             keys=0.9,
                             queries=0.9,
                             values=0.45,
+                            att_outputs=0.25,
                             intermediates=0.45,
-                            outputs=0.25,
+                            outputs=0.2,
                             pooler=0.3,
                         )
-                        # print (sparsity_map)
+                        print (sparsity_map)
+                        # exit(0)
 
                         with tf.control_dependencies([train_op]):
                             with tf.control_dependencies([update_accumulators_op]):
@@ -549,6 +597,7 @@ def create_model(
     bert_config=None,
     use_one_hot_embeddings=True,
     sparsity_technique="weight_pruning",
+    trained_masks=None,
 ):
     """Creates a classification model."""
     if bert_config:
@@ -560,6 +609,7 @@ def create_model(
             token_type_ids=segment_ids,
             use_one_hot_embeddings=use_one_hot_embeddings,
             sparsity_technique=sparsity_technique,
+            trained_np_masks=trained_masks,
         )
 
         output_layer = model.get_pooled_output()
