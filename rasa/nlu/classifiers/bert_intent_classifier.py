@@ -64,6 +64,7 @@ class BertIntentClassifier(Component):
         "end_pruning_epoch": 2,
         "pruning_frequency_steps": 1,
         "finetune_hat_layer_only": False,
+        "load_pruning_masks_from": None,
     }
 
     def _load_bert_params(self, config: Dict[Text, Any]) -> None:
@@ -92,20 +93,13 @@ class BertIntentClassifier(Component):
         self.begin_pruning_epoch = config["begin_pruning_epoch"]
         self.end_pruning_epoch = config["end_pruning_epoch"]
         if self.begin_pruning_epoch > self.epochs:
+            logger.warning("'begin_pruning_epoch' should be < 'epochs'.")
+        if self.end_pruning_epoch < self.begin_pruning_epoch:
             logger.warning(
-                "'begin_pruning_epoch' must be < 'epochs', setting it to epochs-1."
+                "'end_pruning_epoch' must be >= 'begin_pruning_epoch', setting it to 'begin_pruning_epoch'"
             )
-            self.begin_pruning_epoch = max(0, self.epochs - 1)
-        if (
-            self.end_pruning_epoch > self.epochs
-            or self.end_pruning_epoch <= self.begin_pruning_epoch
-        ):
-            logger.warning(
-                "'end_pruning_epoch' must be <= 'epochs' and > 'begin_pruning_epoch', setting it to highest possible correct value"
-            )
-            self.end_pruning_epoch = min(
-                self.epochs, max(self.end_pruning_epoch, self.begin_pruning_epoch)
-            )
+            self.end_pruning_epoch = self.begin_pruning_epoch
+
         self.pruning_frequency_steps = config["pruning_frequency_steps"]
         self.load_pruning_masks_from = config["load_pruning_masks_from"]
 
