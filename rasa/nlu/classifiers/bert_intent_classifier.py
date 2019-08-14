@@ -64,7 +64,7 @@ class BertIntentClassifier(Component):
         "end_pruning_epoch": 2,
         "pruning_frequency_steps": 1,
         "finetune_hat_layer_only": False,
-        "load_pruning_masks_from": None,
+        "load_pruning_masks_from_checkpoint": False,
     }
 
     def _load_bert_params(self, config: Dict[Text, Any]) -> None:
@@ -101,7 +101,9 @@ class BertIntentClassifier(Component):
             self.end_pruning_epoch = self.begin_pruning_epoch
 
         self.pruning_frequency_steps = config["pruning_frequency_steps"]
-        self.load_pruning_masks_from = config["load_pruning_masks_from"]
+        self.load_pruning_masks_from_checkpoint = config[
+            "load_pruning_masks_from_checkpoint"
+        ]
 
     def _load_train_params(self, config: Dict[Text, Any]) -> None:
         self.batch_size = config["batch_size"]
@@ -255,7 +257,7 @@ class BertIntentClassifier(Component):
                 "end_pruning_step": end_pruning_step,
                 "pruning_frequency": self.pruning_frequency_steps,
                 "target_sparsity": self.target_sparsity,
-                "load_masks_from": self.load_pruning_masks_from,
+                # "load_masks_from": self.load_pruning_masks_from,
             },
             "finetune_hat_only": self.finetune_hat_only,
         }
@@ -263,9 +265,14 @@ class BertIntentClassifier(Component):
         warm_start_settings = None
         if self.warm_start_checkpoint:
             if self.hat_layer_in_checkpoint:
-                warm_start_settings = tf.estimator.WarmStartSettings(
-                    self.warm_start_checkpoint
-                )
+                if not self.load_pruning_masks_from_checkpoint:
+                    warm_start_settings = tf.estimator.WarmStartSettings(
+                        self.warm_start_checkpoint
+                    )
+                else:
+                    warm_start_settings = tf.estimator.WarmStartSettings(
+                        self.warm_start_checkpoint, vars_to_warm_start=[".*"]
+                    )
             else:
                 warm_start_settings = tf.estimator.WarmStartSettings(
                     self.warm_start_checkpoint, vars_to_warm_start="bert.*"
