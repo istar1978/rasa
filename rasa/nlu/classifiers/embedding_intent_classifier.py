@@ -171,7 +171,7 @@ class EmbeddingIntentClassifier(Component):
         self.similarity_type = config["similarity_type"]
         self.loss_type = config["loss_type"]
         if self.similarity_type == "auto":
-            if self.loss_type == "softmax":
+            if self.loss_type in {"softmax", "entmax"}:
                 self.similarity_type = "inner"
             elif self.loss_type == "margin":
                 self.similarity_type = "cosine"
