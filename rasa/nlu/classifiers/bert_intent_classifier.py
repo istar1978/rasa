@@ -107,6 +107,7 @@ class BertIntentClassifier(Component):
                 self.epochs, max(self.end_pruning_epoch, self.begin_pruning_epoch)
             )
         self.pruning_frequency_steps = config["pruning_frequency_steps"]
+        self.load_pruning_masks_from = config["load_pruning_masks_from"]
 
     def _load_train_params(self, config: Dict[Text, Any]) -> None:
         self.batch_size = config["batch_size"]
@@ -260,6 +261,7 @@ class BertIntentClassifier(Component):
                 "end_pruning_step": end_pruning_step,
                 "pruning_frequency": self.pruning_frequency_steps,
                 "target_sparsity": self.target_sparsity,
+                "load_masks_from": self.load_pruning_masks_from,
             },
             "finetune_hat_only": self.finetune_hat_only,
         }

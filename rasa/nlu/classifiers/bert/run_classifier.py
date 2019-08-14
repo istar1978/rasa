@@ -461,7 +461,7 @@ def model_fn_builder(
                             outputs=0.25,
                             pooler=0.3,
                         )
-                        print (sparsity_map)
+                        # print (sparsity_map)
 
                         with tf.control_dependencies([train_op]):
                             with tf.control_dependencies([update_accumulators_op]):
