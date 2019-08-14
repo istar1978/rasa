@@ -242,6 +242,7 @@ class Pruning(object):
         global_step=None,
         sparsity=None,
         neuron_rank_accumulators_reset=None,
+        sparsity_map=None,
     ):
         """Set up the specification for model pruning.
 
@@ -254,7 +255,8 @@ class Pruning(object):
           spec: Pruning spec as defined in pruning.proto
           global_step: A tensorflow variable that is used while setting up the
             sparsity function
-          sparsity: A tensorflow scalar variable storing the sparsity
+          sparsity: A tensorflow scalar variable storing the sparsity (pass in the spec, 
+                    not here, if you want gradually increasing sparsity up to some value)
         """
         # Pruning specification
         self._spec = spec if spec else get_pruning_hparams()
@@ -269,7 +271,11 @@ class Pruning(object):
 
         # Stores the tensorflow sparsity variable.
         # Built using self._setup_sparsity() or provided externally
-        self._sparsity = sparsity if sparsity is not None else self._setup_sparsity()
+        self._sparsity_progress = self._setup_sparsity_progress()
+        if sparsity is not None:
+            self._sparsity = sparsity
+        else:
+            self._sparsity = self._setup_sparsity()
 
         # List of tensorflow assignments ops for new masks and thresholds
         self._assign_ops = []
@@ -285,7 +291,7 @@ class Pruning(object):
         ##self._block_pooling_function = self._spec.block_pooling_function
 
         # Mapping of weight names and target sparsity
-        ##self._weight_sparsity_map = self._get_weight_sparsity_map()
+        self._weight_sparsity_map = sparsity_map
 
         self.neuron_rank_accumulators_reset_ops = tf.get_default_graph().get_collection(
             neuron_rank_accumulators_reset
@@ -326,27 +332,32 @@ class Pruning(object):
 
         return math_ops.cast(graph_global_step, dtypes.int32)
 
-    def _setup_sparsity(self):
+    def _setup_sparsity_progress(self):
         begin_step = self._spec.sparsity_function_begin_step
         end_step = self._spec.sparsity_function_end_step
-        initial_sparsity = self._spec.initial_sparsity
-        target_sparsity = self._spec.target_sparsity
-        exponent = self._spec.sparsity_function_exponent
-
-        with ops.name_scope(self._spec.name):
-            p = math_ops.minimum(
+        with tf.name_scope(self._spec.name):
+            progress = tf.minimum(
                 1.0,
-                math_ops.maximum(
+                tf.maximum(
                     0.0,
-                    math_ops.div(
-                        math_ops.cast(self._global_step - begin_step, dtypes.float32),
+                    tf.div(
+                        tf.cast(self._global_step - begin_step, tf.float32),
                         end_step - begin_step,
                     ),
                 ),
             )
-            sparsity = math_ops.add(
-                math_ops.multiply(
-                    initial_sparsity - target_sparsity, math_ops.pow(1 - p, exponent)
+        return progress
+
+    def _setup_sparsity(self):
+        initial_sparsity = self._spec.initial_sparsity
+        target_sparsity = self._spec.target_sparsity
+        exponent = self._spec.sparsity_function_exponent
+
+        with tf.name_scope(self._spec.name):
+            sparsity = tf.add(
+                tf.multiply(
+                    initial_sparsity - target_sparsity,
+                    tf.pow(1 - self._sparsity_progress, exponent),
                 ),
                 target_sparsity,
                 name="sparsity",
@@ -373,18 +384,18 @@ class Pruning(object):
                 )
         return last_update_step
 
-    def _get_weight_sparsity_map(self):
-        """Return the map of weight_name:sparsity parsed from the hparams."""
-        weight_sparsity_map = {}
-        val_list = self._spec.weight_sparsity_map
-        filtered_val_list = [l for l in val_list if l]
-        for val in filtered_val_list:
-            weight_name, sparsity = val.split(":")
-            if float(sparsity) >= 1.0:
-                raise ValueError("Weight sparsity can not exceed 1.0")
-            weight_sparsity_map[weight_name] = float(sparsity)
+    # def _get_weight_sparsity_map(self):
+    #     """Return the map of weight_name:sparsity parsed from the hparams."""
+    #     weight_sparsity_map = {}
+    #     val_list = self._spec.weight_sparsity_map
+    #     filtered_val_list = [l for l in val_list if l]
+    #     for val in filtered_val_list:
+    #         weight_name, sparsity = val.split(":")
+    #         if float(sparsity) >= 1.0:
+    #             raise ValueError("Weight sparsity can not exceed 1.0")
+    #         weight_sparsity_map[weight_name] = float(sparsity)
 
-        return weight_sparsity_map
+    #     return weight_sparsity_map
 
     def _get_sparsity(self, weight_name=None):
         """Return target sparsity for the given layer/weight name."""
@@ -396,6 +407,7 @@ class Pruning(object):
                 for name, sparsity in self._weight_sparsity_map.items()
                 if weight_name.find(name) != -1
             ]
+            # print("Target sparsity: {}".format(target_sparsity))
             if not target_sparsity:
                 return self._sparsity
 
@@ -406,9 +418,10 @@ class Pruning(object):
                 )
             # TODO(suyoggupta): This will work when initial_sparsity = 0. Generalize
             # to handle other cases as well.
-            return math_ops.mul(
-                self._sparsity,
-                math_ops.div(target_sparsity[0], self._spec.target_sparsity),
+            return tf.multiply(
+                self._sparsity_progress,
+                target_sparsity[0],
+                name="current_target_sparsity",
             )
 
     # def _update_mask(self, weights, threshold):
@@ -583,38 +596,80 @@ class Pruning(object):
                 local_rank = tf.abs(rank_accumulator)
                 local_rank = tf.divide(local_rank, tf.norm(local_rank))
 
-                local_ranks.append(local_rank)
+                if self._weight_sparsity_map is not None:
+                    # prune each weight matrix to a different sparsity
+                    sparsity = self._get_sparsity(weight_name=name)
+                    # print("name: <{}>, sparsity: <{}>".format(name, sparsity))
 
-        # concatenate local ranks into an overall one, get top k and determine the threshold
-        global_rank = tf.concat(local_ranks, axis=0, name="global_rank")
-        sparsity = self._get_sparsity()
+                    k = tf.cast(
+                        tf.round(
+                            tf.cast(tf.size(local_rank), tf.float32) * (1 - sparsity)
+                        ),
+                        tf.int32,
+                    )
+                    # Sort the entire array
+                    values, _ = tf.math.top_k(local_rank, k=(k - 1))
 
-        k = tf.cast(
-            tf.round(tf.cast(tf.size(global_rank), tf.float32) * (1 - sparsity)),
-            tf.int32,
-        )
-        # Sort the entire array
-        values, _ = tf.math.top_k(global_rank, k=(k - 1))
+                    # Grab the (k-1) th value
+                    new_local_threshold = values[-1]
 
-        # Grab the (k-1) th value
-        new_threshold = values[-1]
+                    local_threshold = thresholds[i]
+                    mask = masks[i]
 
-        for i, weight in enumerate(weights):
-            threshold = thresholds[i]
-            mask = masks[i]
-            local_rank = local_ranks[i]
+                    new_mask_flat = tf.cast(
+                        tf.greater_equal(local_rank, new_local_threshold), tf.float32
+                    )
+                    new_mask_full_flat = tf.tile(
+                        new_mask_flat, multiples=[weight.shape[0]]
+                    )
+                    new_mask_full = tf.reshape(new_mask_full_flat, shape=weight.shape)
 
-            new_mask_flat = tf.cast(
-                tf.greater_equal(local_rank, new_threshold), tf.float32
+                    self._assign_ops.append(
+                        pruning_utils.variable_assign(
+                            local_threshold, new_local_threshold
+                        )
+                    )
+
+                    self._assign_ops.append(
+                        pruning_utils.variable_assign(mask, new_mask_full)
+                    )
+                else:
+                    # use matrix-specific ranks to rank and prune neurons globally
+                    local_ranks.append(local_rank)
+
+        if self._weight_sparsity_map is None:
+            # concatenate local ranks into an overall one, get top k and determine the threshold
+            global_rank = tf.concat(local_ranks, axis=0, name="global_rank")
+            sparsity = self._get_sparsity()
+
+            k = tf.cast(
+                tf.round(tf.cast(tf.size(global_rank), tf.float32) * (1 - sparsity)),
+                tf.int32,
             )
-            new_mask_full_flat = tf.tile(new_mask_flat, multiples=[weight.shape[0]])
-            new_mask_full = tf.reshape(new_mask_full_flat, shape=weight.shape)
+            # Sort the entire array
+            values, _ = tf.math.top_k(global_rank, k=(k - 1))
 
-            self._assign_ops.append(
-                pruning_utils.variable_assign(threshold, new_threshold)
-            )
+            # Grab the (k-1) th value
+            new_global_threshold = values[-1]
 
-            self._assign_ops.append(pruning_utils.variable_assign(mask, new_mask_full))
+            for i, weight in enumerate(weights):
+                threshold = thresholds[i]
+                mask = masks[i]
+                local_rank = local_ranks[i]
+
+                new_mask_flat = tf.cast(
+                    tf.greater_equal(local_rank, new_global_threshold), tf.float32
+                )
+                new_mask_full_flat = tf.tile(new_mask_flat, multiples=[weight.shape[0]])
+                new_mask_full = tf.reshape(new_mask_full_flat, shape=weight.shape)
+
+                self._assign_ops.append(
+                    pruning_utils.variable_assign(threshold, new_global_threshold)
+                )
+
+                self._assign_ops.append(
+                    pruning_utils.variable_assign(mask, new_mask_full)
+                )
 
     def mask_update_op(self):
         with tf.name_scope(self._spec.name):

@@ -26,6 +26,7 @@ from rasa.nlu.classifiers.bert.modeling import BertModel
 import tensorflow as tf
 import tensorflow_hub as hub
 from tensorflow.contrib.model_pruning.python import pruning as magnitude_pruning
+from tensorflow.contrib.model_pruning.python.layers import core_layers as core
 from rasa.nlu.classifiers.fake_neuron_pruning import pruning as neuron_pruning
 
 
@@ -244,6 +245,32 @@ def check_global_sparsity():
     tf.summary.scalar("global_weight_sparsity", sparsity)
 
 
+def build_sparsity_map(
+    graph, keys=0.5, queries=0.5, values=0.5, intermediates=0.5, outputs=0.5, pooler=0.5
+):
+    weights = graph.get_collection(core.WEIGHT_COLLECTION)
+    sparsity_map = {}
+    for w in weights:
+        # print(w.name)
+        if "/key/weights" in w.name:
+            sparsity = keys
+        elif "/query/weights" in w.name:
+            sparsity = queries
+        elif "/value/weights" in w.name:
+            sparsity = values
+        elif "/intermediate/dense/weights" in w.name:
+            sparsity = intermediates
+        elif "/output/dense/weights" in w.name:
+            sparsity = outputs
+        elif "/pooler/dense/weights" in w.name:
+            sparsity = pooler
+        else:
+            raise ValueError("Unrecognised weight to be pruned: {}".format(w.name))
+        sparsity_map[w.name] = sparsity
+
+    return sparsity_map
+
+
 def pruning_hparams(hparams):  # pylint: disable=unused-argument
     """Helper to get hparams for pruning library."""
     hparams = tf.contrib.training.HParams(
@@ -425,11 +452,16 @@ def model_fn_builder(
                             ),
                         )
 
-                        writer = tf.summary.FileWriter(
-                            logdir="tfgraph-bert-raw-train-np", graph=g
+                        sparsity_map = build_sparsity_map(
+                            g,
+                            keys=0.9,
+                            queries=0.9,
+                            values=0.45,
+                            intermediates=0.45,
+                            outputs=0.25,
+                            pooler=0.3,
                         )
-                        writer.flush()
-                        # exit(0)
+                        print (sparsity_map)
 
                         with tf.control_dependencies([train_op]):
                             with tf.control_dependencies([update_accumulators_op]):
@@ -440,9 +472,16 @@ def model_fn_builder(
                                     mp_hparams,
                                     global_step=tf.train.get_global_step(),
                                     neuron_rank_accumulators_reset="accumulators_reset",
+                                    sparsity_map=sparsity_map,
                                 )
                                 mask_update_op = pruning.conditional_mask_update_op()
                                 train_op = mask_update_op
+
+                        writer = tf.summary.FileWriter(
+                            logdir="tfgraph-bert-raw-train-np", graph=g
+                        )
+                        writer.flush()
+                        # exit(0)
 
                         logging_hook = tf.train.LoggingTensorHook(
                             {
