@@ -295,7 +295,7 @@ def load_pruning_masks_from_ckpt(ckpt_name):
         nonzero = np.count_nonzero(mask_squashed)
         sparsity = 1 - (nonzero / len(mask_squashed))
         mask_dict[scope] = mask_squashed
-        print ("{}: {:.1f}% sparsity".format(scope, 100 * sparsity))
+        # print ("{}: {:.1f}% sparsity".format(scope, 100 * sparsity))
 
     return mask_dict
 
@@ -323,131 +323,147 @@ def pruning_hparams(hparams):  # pylint: disable=unused-argument
 
     return hparams
 
+    # def model_fn_builder(
+    #     bert_tfhub_module_handle,
+    #     num_labels,
+    #     learning_rate,
+    #     num_train_steps,
+    #     num_warmup_steps,
+    #     bert_config,
+    # ):
+    """Returns `model_fn` closure for TPUEstimator."""
 
-def model_fn_builder(
+
+def build_model(
+    features,
+    mode,
+    params,
     bert_tfhub_module_handle,
     num_labels,
     learning_rate,
     num_train_steps,
     num_warmup_steps,
     bert_config,
-):
-    """Returns `model_fn` closure for TPUEstimator."""
+):  # pylint: disable=unused-argument
+    print ("####################\nMODE=<{}>\n##########################".format(mode))
+    # print(tf.estimator.ModeKeys.PREDICT)
+    """The `model_fn` for TPUEstimator."""
+    input_ids = features["input_ids"]
+    input_mask = features["input_mask"]
+    segment_ids = features["segment_ids"]
+    label_ids = features["label_ids"]
+    # print(label_ids)
+    # exit(0)
 
-    def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
-        """The `model_fn` for TPUEstimator."""
-        input_ids = features["input_ids"]
-        input_mask = features["input_mask"]
-        segment_ids = features["segment_ids"]
-        label_ids = features["label_ids"]
+    is_predicting = mode == "predict"
+    if not is_predicting:
+        masks_dict = None
+        if (
+            params["sparsity_technique"] == "neuron_pruning"
+            and params["sparsification_params"]["resize_pruned_matrices"]
+        ):
+            # get a var: mask dict from checkpoint
+            masks_ckpt = params["sparsification_params"]["checkpoint_for_pruning_masks"]
+            if masks_ckpt is None:
+                raise ValueError(
+                    "You are trying to resize pruned weight matrices but haven't provided a checkpoint to take the masks from!"
+                )
+            masks_dict = load_pruning_masks_from_ckpt(ckpt_name=masks_ckpt)
 
-        is_predicting = mode == tf.estimator.ModeKeys.PREDICT
-        if not is_predicting:
-            masks_dict = None
-            if (
-                params["sparsity_technique"] == "neuron_pruning"
-                and params["sparsification_params"]["resize_pruned_matrices"]
-            ):
-                # get a var: mask dict from checkpoint
-                masks_ckpt = params["sparsification_params"][
-                    "checkpoint_for_pruning_masks"
-                ]
-                if masks_ckpt is None:
-                    raise ValueError(
-                        "You are trying to resize pruned weight matrices but haven't provided a checkpoint to take the masks from!"
-                    )
-                masks_dict = load_pruning_masks_from_ckpt(ckpt_name=masks_ckpt)
+        g = tf.get_default_graph()
+        (loss, predicted_labels, log_probs) = create_model(
+            is_predicting,
+            input_ids,
+            input_mask,
+            segment_ids,
+            label_ids,
+            num_labels,
+            bert_tfhub_module_handle,
+            bert_config,
+            sparsity_technique=params["sparsity_technique"],
+            trained_masks=masks_dict,
+        )
+        # [print(v.name) for v in g.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
+        # exit(0)
+        """
+        accuracy = tf.metrics.accuracy(label_ids, predicted_labels)
+        logging_hook = tf.train.LoggingTensorHook(
+            {"loss": loss, "accuracy": accuracy[1]}, every_n_iter=1
+        )
 
-            g = tf.get_default_graph()
-            (loss, predicted_labels, log_probs) = create_model(
-                is_predicting,
-                input_ids,
-                input_mask,
-                segment_ids,
-                label_ids,
-                num_labels,
-                bert_tfhub_module_handle,
-                bert_config,
-                sparsity_technique=params["sparsity_technique"],
-                trained_masks=masks_dict,
-            )
-            exit(0)
-
+        # Calculate evaluation metrics.
+        def metric_fn(label_ids, predicted_labels):
             accuracy = tf.metrics.accuracy(label_ids, predicted_labels)
-            logging_hook = tf.train.LoggingTensorHook(
-                {"loss": loss, "accuracy": accuracy[1]}, every_n_iter=1
-            )
+            f1_score = tf.contrib.metrics.f1_score(label_ids, predicted_labels)
+            auc = tf.metrics.auc(label_ids, predicted_labels)
+            recall = tf.metrics.recall(label_ids, predicted_labels)
+            precision = tf.metrics.precision(label_ids, predicted_labels)
+            true_pos = tf.metrics.true_positives(label_ids, predicted_labels)
+            true_neg = tf.metrics.true_negatives(label_ids, predicted_labels)
+            false_pos = tf.metrics.false_positives(label_ids, predicted_labels)
+            false_neg = tf.metrics.false_negatives(label_ids, predicted_labels)
+            return {
+                "eval_accuracy": accuracy,
+                "f1_score": f1_score,
+                "auc": auc,
+                "precision": precision,
+                "recall": recall,
+                "true_positives": true_pos,
+                "true_negatives": true_neg,
+                "false_positives": false_pos,
+                "false_negatives": false_neg,
+            }
 
-            # Calculate evaluation metrics.
-            def metric_fn(label_ids, predicted_labels):
-                accuracy = tf.metrics.accuracy(label_ids, predicted_labels)
-                f1_score = tf.contrib.metrics.f1_score(label_ids, predicted_labels)
-                auc = tf.metrics.auc(label_ids, predicted_labels)
-                recall = tf.metrics.recall(label_ids, predicted_labels)
-                precision = tf.metrics.precision(label_ids, predicted_labels)
-                true_pos = tf.metrics.true_positives(label_ids, predicted_labels)
-                true_neg = tf.metrics.true_negatives(label_ids, predicted_labels)
-                false_pos = tf.metrics.false_positives(label_ids, predicted_labels)
-                false_neg = tf.metrics.false_negatives(label_ids, predicted_labels)
-                return {
-                    "eval_accuracy": accuracy,
-                    "f1_score": f1_score,
-                    "auc": auc,
-                    "precision": precision,
-                    "recall": recall,
-                    "true_positives": true_pos,
-                    "true_negatives": true_neg,
-                    "false_positives": false_pos,
-                    "false_negatives": false_neg,
-                }
-
-            eval_metrics = metric_fn(label_ids, predicted_labels)
-
-            if mode == tf.estimator.ModeKeys.TRAIN:
-                if params["sparsity_technique"] == "weight_pruning":
-                    train_op = create_optimizer(
-                        loss,
-                        learning_rate,
-                        num_train_steps,
-                        num_warmup_steps,
-                        use_tpu=False,
-                        vars_to_optimize=(
-                            None
-                            if not params["finetune_hat_only"]
-                            else ["output_weights", "output_bias"]
-                        ),
-                    )
-                    if not "load_masks_from" in params:
-                        # If we are loading trained masks, don't add the mask update
-                        # step to the training process and keep the masks static
-                        with tf.control_dependencies([train_op]):
-                            mp_hparams = pruning_hparams(
-                                params["sparsification_params"]
-                            )
-                            p = magnitude_pruning.Pruning(
-                                mp_hparams, global_step=tf.train.get_global_step()
-                            )
-                            mask_update_op = p.conditional_mask_update_op()
-                            train_op = mask_update_op
-                    check_global_sparsity()
-
-                elif params["sparsity_technique"] == "neuron_pruning":
-                    # prepare gradient and activation accumulators
-                    # accumulate activations and grads by summing, this basically requires two ops to be added to train_op
-                    # step through all relevant vars
-                    # multiply activations by gradients, sum as required to get neuron scores
-                    # select K smallest neurons
-                    # update the weight matrix by setting stuff to 0
-
-                    def train_formatter(stats):
-                        s = "accuracy = {:.4f}, loss = {:.5f}, sparsity = {:.3f}, train_step = {}".format(
-                            stats["accuracy"],
-                            stats["loss"],
-                            stats["sparsity"],
-                            stats["train_step"],
+        eval_metrics = metric_fn(label_ids, predicted_labels)
+        """
+        if mode == "train":
+            if params["sparsity_technique"] == "weight_pruning":
+                train_op = create_optimizer(
+                    loss,
+                    learning_rate,
+                    num_train_steps,
+                    num_warmup_steps,
+                    use_tpu=False,
+                    vars_to_optimize=(
+                        None
+                        if not params["finetune_hat_only"]
+                        else ["output_weights", "output_bias"]
+                    ),
+                )
+                if not "load_masks_from" in params:
+                    # If we are loading trained masks, don't add the mask update
+                    # step to the training process and keep the masks static
+                    with tf.control_dependencies([train_op]):
+                        mp_hparams = pruning_hparams(params["sparsification_params"])
+                        p = magnitude_pruning.Pruning(
+                            mp_hparams, global_step=tf.train.get_global_step()
                         )
-                        return s
+                        mask_update_op = p.conditional_mask_update_op()
+                        train_op = mask_update_op
+                check_global_sparsity()
 
+            elif params["sparsity_technique"] == "neuron_pruning":
+                # prepare gradient and activation accumulators
+                # accumulate activations and grads by summing, this basically requires two ops to be added to train_op
+                # step through all relevant vars
+                # multiply activations by gradients, sum as required to get neuron scores
+                # select K smallest neurons
+                # update the weight matrix by setting stuff to 0
+
+                """
+                def train_formatter(stats):
+                    s = "accuracy = {:.4f}, loss = {:.5f}, sparsity = {:.3f}, train_step = {}".format(
+                        stats["accuracy"],
+                        stats["loss"],
+                        stats["sparsity"],
+                        stats["train_step"],
+                    )
+                    return s
+                """
+
+                if not params["sparsification_params"][
+                    "resize_pruned_matrices"
+                ]:  # doing pruning mask updates and setting up all tha fancy shit around that
                     pruning_activations = g.get_collection(
                         "pruning_activation_providers"
                     )
@@ -508,7 +524,7 @@ def model_fn_builder(
                             outputs=0.2,
                             pooler=0.3,
                         )
-                        print (sparsity_map)
+                        # print (sparsity_map)
                         # exit(0)
 
                         with tf.control_dependencies([train_op]):
@@ -524,24 +540,20 @@ def model_fn_builder(
                                 )
                                 mask_update_op = pruning.conditional_mask_update_op()
                                 train_op = mask_update_op
-
-                        writer = tf.summary.FileWriter(
-                            logdir="tfgraph-bert-raw-train-np", graph=g
-                        )
-                        writer.flush()
-                        # exit(0)
-
-                        logging_hook = tf.train.LoggingTensorHook(
-                            {
-                                "loss": loss,
-                                "accuracy": accuracy[1],
-                                "train_step": tf.train.get_global_step(),
-                                "sparsity": pruning._get_sparsity(),
-                            },
-                            every_n_iter=1,
-                            formatter=train_formatter,
-                        )
-                else:
+                    """
+                    logging_hook = tf.train.LoggingTensorHook(
+                        {
+                            "loss": loss,
+                            "accuracy": accuracy[1],
+                            "train_step": tf.train.get_global_step(),
+                            "sparsity": pruning._get_sparsity(),
+                        },
+                        every_n_iter=1,
+                        formatter=train_formatter,
+                    )
+                    """
+                else:  # not doing pruning mask updates
+                    print ("Resizing the weight matrices!")
                     train_op = create_optimizer(
                         loss,
                         learning_rate,
@@ -554,19 +566,61 @@ def model_fn_builder(
                             else ["output_weights", "output_bias"]
                         ),
                     )
-
-                return tf.estimator.EstimatorSpec(
-                    mode=mode,
-                    loss=loss,
-                    train_op=train_op,
-                    training_hooks=[logging_hook],
+                    """
+                    logging_hook = tf.train.LoggingTensorHook(
+                        {
+                            "loss": loss,
+                            "accuracy": accuracy[1],
+                            "train_step": tf.train.get_global_step(),
+                            "sparsity": params["sparsification_params"]["target_sparsity"]
+                        },
+                        every_n_iter=1,
+                        formatter=train_formatter,
+                    )
+                    """
+                """
+                writer = tf.summary.FileWriter(
+                    logdir="tfgraph-bert-raw-train-np", graph=g
                 )
+                writer.flush()
+                # exit(0)
+                """
+
             else:
-                return tf.estimator.EstimatorSpec(
-                    mode=mode, loss=loss, eval_metric_ops=eval_metrics
+                train_op = create_optimizer(
+                    loss,
+                    learning_rate,
+                    num_train_steps,
+                    num_warmup_steps,
+                    use_tpu=False,
+                    vars_to_optimize=(
+                        None
+                        if not params["finetune_hat_only"]
+                        else ["output_weights", "output_bias"]
+                    ),
                 )
-        else:
 
+            return train_op, loss
+            """
+            return tf.estimator.EstimatorSpec(
+                mode=mode,
+                loss=loss,
+                train_op=train_op,
+                training_hooks=[logging_hook],
+            )
+            """
+
+        else:
+            # the mode is not train nor infer, does this ever get called??
+            raise ValueError("'mode' must be either 'train' or 'predict'")
+            return tf.estimator.EstimatorSpec(
+                mode=mode, loss=loss, eval_metric_ops=eval_metrics
+            )
+    else:
+        print ("DOING INFERENCE MODEL PREPARATION")
+        print (params)
+        print (input_ids.shape)
+        if params["sparsity_technique"] != "neuron_pruning":
             (predicted_labels, log_probs) = create_model(
                 is_predicting,
                 input_ids,
@@ -578,12 +632,74 @@ def model_fn_builder(
                 bert_config,
                 sparsity_technique=params["sparsity_technique"],
             )
+            predictions = {"probabilities": log_probs}
+            # return tf.estimator.EstimatorSpec(mode, predictions=predictions)
+
+        elif params["sparsity_technique"] == "neuron_pruning":
+            print ("NEURON PRUNING")
+            masks_dict = None
+            if params["sparsification_params"]["resize_pruned_matrices"]:
+                masks_ckpt = params["sparsification_params"][
+                    "checkpoint_for_pruning_masks"
+                ]
+                if masks_ckpt is None:
+                    raise ValueError(
+                        "You are trying to resize pruned weight matrices but haven't provided a checkpoint to take the masks from!"
+                    )
+                masks_dict = load_pruning_masks_from_ckpt(ckpt_name=masks_ckpt)
+
+            # g = tf.get_default_graph()
+            (predicted_labels, log_probs) = create_model(
+                is_predicting,
+                input_ids,
+                input_mask,
+                segment_ids,
+                label_ids,
+                num_labels,
+                bert_tfhub_module_handle,
+                bert_config,
+                sparsity_technique=params["sparsity_technique"],
+                trained_masks=masks_dict,
+            )
+            # g = tf.get_default_graph()
+
+            # writer = tf.summary.FileWriter(
+            #     logdir="tfgraph-bert-raw-test-np", graph=g
+            # )
+            # writer.flush()
 
             predictions = {"probabilities": log_probs}
+            """
+            return tf.estimator.EstimatorSpec(
+                mode=mode,
+                # loss=loss,
+                # train_op=train_op,
+                # training_hooks=[logging_hook],
+                predictions=predictions
+            )
+            """
+        else:
+            raise ValueError("WTF??")
 
-            return tf.estimator.EstimatorSpec(mode, predictions=predictions)
+        return predictions
+        # (predicted_labels, log_probs) = create_model(
+        #     is_predicting,
+        #     input_ids,
+        #     input_mask,
+        #     segment_ids,
+        #     label_ids,
+        #     num_labels,
+        #     bert_tfhub_module_handle,
+        #     bert_config,
+        #     sparsity_technique=params["sparsity_technique"],
+        # )
 
-    return model_fn
+        # predictions = {"probabilities": log_probs}
+
+        # return tf.estimator.EstimatorSpec(mode, predictions=predictions)
+
+
+# return model_fn
 
 
 def create_model(
@@ -610,6 +726,7 @@ def create_model(
             use_one_hot_embeddings=use_one_hot_embeddings,
             sparsity_technique=sparsity_technique,
             trained_np_masks=trained_masks,
+            scope="bert",
         )
 
         output_layer = model.get_pooled_output()
@@ -631,17 +748,18 @@ def create_model(
 
     hidden_size = output_layer.shape[-1].value
 
-    output_weights = tf.get_variable(
-        "output_weights",
-        [num_labels, hidden_size],
-        initializer=tf.truncated_normal_initializer(stddev=0.02),
-    )
+    with tf.variable_scope("", reuse=tf.AUTO_REUSE):
+        output_weights = tf.get_variable(
+            "output_weights",
+            [num_labels, hidden_size],
+            initializer=tf.truncated_normal_initializer(stddev=0.02),
+        )
 
-    output_bias = tf.get_variable(
-        "output_bias", [num_labels], initializer=tf.zeros_initializer()
-    )
+        output_bias = tf.get_variable(
+            "output_bias", [num_labels], initializer=tf.zeros_initializer()
+        )
 
-    with tf.variable_scope("loss"):
+    with tf.variable_scope("loss", reuse=tf.AUTO_REUSE):
         if not is_predicting:
             # I.e., 0.1 dropout
             output_layer = tf.nn.dropout(output_layer, keep_prob=0.9)
@@ -681,23 +799,54 @@ def create_tokenizer_from_hub_module(bert_tfhub_module_handle):
 #
 
 
-def serving_input_fn_builder(max_seq_length):
-    def serving_input_fn():
-        label_ids = tf.placeholder(tf.int32, [None], name="label_ids")
-        input_ids = tf.placeholder(tf.int32, [None, max_seq_length], name="input_ids")
-        input_mask = tf.placeholder(tf.int32, [None, max_seq_length], name="input_mask")
-        segment_ids = tf.placeholder(
-            tf.int32, [None, max_seq_length], name="segment_ids"
-        )
-        input_fn = tf.estimator.export.build_raw_serving_input_receiver_fn(
-            {
-                "label_ids": label_ids,
-                "input_ids": input_ids,
-                "input_mask": input_mask,
-                "segment_ids": segment_ids,
-            }
-        )()
-        return input_fn
+def serving_input_fn_builder(max_seq_length, is_predicting=False):
+    if is_predicting:
+        print ("CREATING PREDICTING INPUT SERVER (BATCH SIZE = 1)")
+
+        def serving_input_fn():
+            label_ids = tf.placeholder(tf.int32, [None], name="label_ids")
+            input_ids = tf.placeholder(
+                tf.int32, [None, max_seq_length], name="input_ids"
+            )
+            input_mask = tf.placeholder(
+                tf.int32, [None, max_seq_length], name="input_mask"
+            )
+            segment_ids = tf.placeholder(
+                tf.int32, [None, max_seq_length], name="segment_ids"
+            )
+            input_fn = tf.estimator.export.build_raw_serving_input_receiver_fn(
+                {
+                    "label_ids": label_ids,
+                    "input_ids": input_ids,
+                    "input_mask": input_mask,
+                    "segment_ids": segment_ids,
+                },
+                default_batch_size=1,
+            )()
+            return input_fn
+
+    else:
+
+        def serving_input_fn():
+            label_ids = tf.placeholder(tf.int32, [None], name="label_ids")
+            input_ids = tf.placeholder(
+                tf.int32, [None, max_seq_length], name="input_ids"
+            )
+            input_mask = tf.placeholder(
+                tf.int32, [None, max_seq_length], name="input_mask"
+            )
+            segment_ids = tf.placeholder(
+                tf.int32, [None, max_seq_length], name="segment_ids"
+            )
+            input_fn = tf.estimator.export.build_raw_serving_input_receiver_fn(
+                {
+                    "label_ids": label_ids,
+                    "input_ids": input_ids,
+                    "input_mask": input_mask,
+                    "segment_ids": segment_ids,
+                }
+            )()
+            return input_fn
 
     return serving_input_fn
 
@@ -722,6 +871,56 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length):
             tokens_a.pop()
         else:
             tokens_b.pop()
+
+
+def build_input_dataset(features, seq_length, is_training, drop_remainder, params):
+    """Creates an `input_fn` closure to be passed to TPUEstimator."""
+
+    all_input_ids = []
+    all_input_mask = []
+    all_segment_ids = []
+    all_label_ids = []
+
+    for feature in features:
+        all_input_ids.append(feature.input_ids)
+        all_input_mask.append(feature.input_mask)
+        all_segment_ids.append(feature.segment_ids)
+        all_label_ids.append(feature.label_id)
+
+    # def input_fn(params):
+    #     """The actual input function."""
+    batch_size = params["batch_size"]
+
+    num_examples = len(features)
+
+    # This is for demo purposes and does NOT scale to large data sets. We do
+    # not use Dataset.from_generator() because that uses tf.py_func which is
+    # not TPU compatible. The right way to load data is with TFRecordReader.
+    d = tf.data.Dataset.from_tensor_slices(
+        {
+            "input_ids": tf.constant(
+                all_input_ids, shape=[num_examples, seq_length], dtype=tf.int32
+            ),
+            "input_mask": tf.constant(
+                all_input_mask, shape=[num_examples, seq_length], dtype=tf.int32
+            ),
+            "segment_ids": tf.constant(
+                all_segment_ids, shape=[num_examples, seq_length], dtype=tf.int32
+            ),
+            "label_ids": tf.constant(
+                all_label_ids, shape=[num_examples], dtype=tf.int32
+            ),
+        }
+    )
+
+    if is_training:
+        d = d.repeat()
+        d = d.shuffle(buffer_size=100)
+
+    d = d.batch(batch_size=batch_size, drop_remainder=drop_remainder)
+    return d
+
+    # return input_fn
 
 
 # This function is not used by this file but is still used by the Colab and
