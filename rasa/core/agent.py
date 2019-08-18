@@ -3,6 +3,7 @@ import os
 import shutil
 import tempfile
 import uuid
+import multiprocessing
 from asyncio import CancelledError
 from sanic import Sanic
 from typing import Any, Callable, Dict, List, Optional, Text, Tuple, Union
@@ -316,6 +317,10 @@ class Agent(object):
         self.model_directory = model_directory
         self.model_server = model_server
         self.remote_storage = remote_storage
+
+        # Initialize shared object of type unsigned int for tracking
+        # the number of active training processes
+        self.active_training_processes = multiprocessing.Value('I')
 
     def update_model(
         self,
@@ -713,6 +718,8 @@ class Agent(object):
 
         logger.debug("Agent trainer got kwargs: {}".format(kwargs))
 
+        with self.active_training_processes.get_lock():
+            self.active_training_processes.value += 1
         self.policy_ensemble.train(training_trackers, self.domain, **kwargs)
         self._set_fingerprint()
 
