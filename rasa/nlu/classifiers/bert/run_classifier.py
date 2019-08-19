@@ -348,12 +348,20 @@ def build_model(
     print ("####################\nMODE=<{}>\n##########################".format(mode))
     # print(tf.estimator.ModeKeys.PREDICT)
     """The `model_fn` for TPUEstimator."""
-    input_ids = features["input_ids"]
-    input_mask = features["input_mask"]
-    segment_ids = features["segment_ids"]
-    label_ids = features["label_ids"]
-    # print(label_ids)
+    input_ids = tf.identity(features["input_ids"], name="input_ids")
+    input_mask = tf.identity(features["input_mask"], name="input_mask")
+    segment_ids = tf.identity(features["segment_ids"], name="segment_ids")
+    label_ids = tf.identity(features["label_ids"], name="label_ids")
+
+    # print(input_ids, input_mask, segment_ids, label_ids)
     # exit(0)
+
+    input_tensors = {
+        "input_ids": input_ids,
+        "input_mask": input_mask,
+        "segment_ids": segment_ids,
+        "label_ids": label_ids,
+    }
 
     is_predicting = mode == "predict"
     if not is_predicting:
@@ -514,16 +522,39 @@ def build_model(
                             ),
                         )
 
+                        # sparsity_map = build_sparsity_map(g)
+                        # sparsity_map = build_sparsity_map(
+                        #     g,
+                        #     keys=0.9,
+                        #     queries=0.9,
+                        #     values=0.45,
+                        #     att_outputs=0.25,
+                        #     intermediates=0.45,
+                        #     outputs=0.2,
+                        #     pooler=0.3,
+                        # )
+                        c = 1.2
                         sparsity_map = build_sparsity_map(
                             g,
                             keys=0.9,
                             queries=0.9,
-                            values=0.45,
-                            att_outputs=0.25,
-                            intermediates=0.45,
-                            outputs=0.2,
-                            pooler=0.3,
+                            values=0.45 * c,
+                            att_outputs=0.25 * c,
+                            intermediates=0.45 * c,
+                            outputs=0.2 * c,
+                            pooler=0.3 * c,
                         )
+
+                        # sparsity_map = build_sparsity_map(
+                        #     g,
+                        #     keys=almost_zero,
+                        #     queries=almost_zero,
+                        #     values=almost_zero,
+                        #     att_outputs=almost_zero,
+                        #     intermediates=almost_zero,
+                        #     outputs=almost_zero,
+                        #     pooler=almost_zero,
+                        # )
                         # print (sparsity_map)
                         # exit(0)
 
@@ -600,26 +631,13 @@ def build_model(
                     ),
                 )
 
-            return train_op, loss
-            """
-            return tf.estimator.EstimatorSpec(
-                mode=mode,
-                loss=loss,
-                train_op=train_op,
-                training_hooks=[logging_hook],
-            )
-            """
-
+            return train_op, loss, input_tensors, log_probs, predicted_labels
         else:
-            # the mode is not train nor infer, does this ever get called??
             raise ValueError("'mode' must be either 'train' or 'predict'")
-            return tf.estimator.EstimatorSpec(
-                mode=mode, loss=loss, eval_metric_ops=eval_metrics
-            )
     else:
-        print ("DOING INFERENCE MODEL PREPARATION")
-        print (params)
-        print (input_ids.shape)
+        # print ("DOING INFERENCE MODEL PREPARATION")
+        # print (params)
+        # print (input_ids.shape)
         if params["sparsity_technique"] != "neuron_pruning":
             (predicted_labels, log_probs) = create_model(
                 is_predicting,
@@ -632,11 +650,7 @@ def build_model(
                 bert_config,
                 sparsity_technique=params["sparsity_technique"],
             )
-            predictions = {"probabilities": log_probs}
-            # return tf.estimator.EstimatorSpec(mode, predictions=predictions)
-
         elif params["sparsity_technique"] == "neuron_pruning":
-            print ("NEURON PRUNING")
             masks_dict = None
             if params["sparsification_params"]["resize_pruned_matrices"]:
                 masks_ckpt = params["sparsification_params"][
@@ -648,7 +662,6 @@ def build_model(
                     )
                 masks_dict = load_pruning_masks_from_ckpt(ckpt_name=masks_ckpt)
 
-            # g = tf.get_default_graph()
             (predicted_labels, log_probs) = create_model(
                 is_predicting,
                 input_ids,
@@ -661,45 +674,10 @@ def build_model(
                 sparsity_technique=params["sparsity_technique"],
                 trained_masks=masks_dict,
             )
-            # g = tf.get_default_graph()
-
-            # writer = tf.summary.FileWriter(
-            #     logdir="tfgraph-bert-raw-test-np", graph=g
-            # )
-            # writer.flush()
-
-            predictions = {"probabilities": log_probs}
-            """
-            return tf.estimator.EstimatorSpec(
-                mode=mode,
-                # loss=loss,
-                # train_op=train_op,
-                # training_hooks=[logging_hook],
-                predictions=predictions
-            )
-            """
         else:
             raise ValueError("WTF??")
 
-        return predictions
-        # (predicted_labels, log_probs) = create_model(
-        #     is_predicting,
-        #     input_ids,
-        #     input_mask,
-        #     segment_ids,
-        #     label_ids,
-        #     num_labels,
-        #     bert_tfhub_module_handle,
-        #     bert_config,
-        #     sparsity_technique=params["sparsity_technique"],
-        # )
-
-        # predictions = {"probabilities": log_probs}
-
-        # return tf.estimator.EstimatorSpec(mode, predictions=predictions)
-
-
-# return model_fn
+        return predicted_labels, log_probs, input_tensors
 
 
 def create_model(
@@ -766,12 +744,12 @@ def create_model(
 
         logits = tf.matmul(output_layer, output_weights, transpose_b=True)
         logits = tf.nn.bias_add(logits, output_bias)
-        log_probs = tf.nn.log_softmax(logits, axis=-1)
+        log_probs = tf.nn.log_softmax(logits, axis=-1, name="log_probs")
 
         one_hot_labels = tf.one_hot(labels, depth=num_labels, dtype=tf.float32)
 
         predicted_labels = tf.squeeze(
-            tf.argmax(log_probs, axis=-1, output_type=tf.int32)
+            tf.argmax(log_probs, axis=-1, output_type=tf.int32), name="predictions"
         )
 
         if is_predicting:
