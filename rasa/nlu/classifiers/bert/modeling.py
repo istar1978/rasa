@@ -223,7 +223,8 @@ class BertModel(object):
 
                 # Run the stacked transformer.
                 # `sequence_output` shape = [batch_size, seq_length, hidden_size].
-                self.all_encoder_layers = transformer_model(
+                # self.all_encoder_layers = transformer_model(
+                self.sequence_output = transformer_model(
                     input_tensor=self.embedding_output,
                     attention_mask=attention_mask,
                     hidden_size=config.hidden_size,
@@ -234,12 +235,13 @@ class BertModel(object):
                     hidden_dropout_prob=config.hidden_dropout_prob,
                     attention_probs_dropout_prob=config.attention_probs_dropout_prob,
                     initializer_range=config.initializer_range,
-                    do_return_all_layers=True,
+                    do_return_all_layers=False,
                     sparsity_technique=self.sparsity_technique,
                     trained_np_masks=self.trained_np_masks,
                 )
 
-            self.sequence_output = self.all_encoder_layers[-1]
+            # self.sequence_output = self.all_encoder_layers[-1]
+
             # The "pooler" converts the encoded sequence tensor of shape
             # [batch_size, seq_length, hidden_size] to a tensor of shape
             # [batch_size, hidden_size]. This is necessary for segment-level
@@ -970,12 +972,14 @@ def transformer_model(
 
     if do_return_all_layers:
         final_outputs = []
-        for layer_output in all_layer_outputs:
-            final_output = reshape_from_matrix(layer_output, input_shape)
-            final_outputs.append(final_output)
+        with tf.variable_scope("resize_layer_outputs_to_3d"):
+            for layer_output in all_layer_outputs:
+                final_output = reshape_from_matrix(layer_output, input_shape)
+                final_outputs.append(final_output)
         return final_outputs
     else:
-        final_output = reshape_from_matrix(prev_output, input_shape)
+        with tf.variable_scope("resize_layer_outputs_to_3d"):
+            final_output = reshape_from_matrix(prev_output, input_shape)
         return final_output
 
 

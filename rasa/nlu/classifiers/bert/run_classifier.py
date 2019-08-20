@@ -533,17 +533,27 @@ def build_model(
                         #     outputs=0.2,
                         #     pooler=0.3,
                         # )
-                        c = 1.2
                         sparsity_map = build_sparsity_map(
                             g,
                             keys=0.9,
                             queries=0.9,
-                            values=0.45 * c,
-                            att_outputs=0.25 * c,
-                            intermediates=0.45 * c,
-                            outputs=0.2 * c,
-                            pooler=0.3 * c,
+                            values=0.45,
+                            att_outputs=0.25,
+                            intermediates=0.6,
+                            outputs=0.2,
+                            pooler=0.3,
                         )
+                        # c = 1.2
+                        # sparsity_map = build_sparsity_map(
+                        #     g,
+                        #     keys=0.9,
+                        #     queries=0.9,
+                        #     values=0.45 * c,
+                        #     att_outputs=0.25 * c,
+                        #     intermediates=0.6,
+                        #     outputs=0.2 * c,
+                        #     pooler=0.3 * c,
+                        # )
 
                         # sparsity_map = build_sparsity_map(
                         #     g,

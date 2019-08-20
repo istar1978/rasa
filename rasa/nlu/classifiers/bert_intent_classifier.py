@@ -457,12 +457,13 @@ class BertIntentClassifier(Component):
 
         # full (bare)              141s (0.143s/message), 406mb.
         # neuron pruned (0% avg)   156s (0.158s/message), 406mb. (measured the overhead created by scattering things)
-        # neuron pruned (50% avg)  142s (0.144s/message), 271mb. (k:0.9 q:0.9 v:0.45 ao:0.25 i:0.45 o:0.2 p:0.3)
+        # neuron pruned (50% avg)  142s (0.144s/message), 271mb. (k:.9 q:.9 v:.45 ao:.25 i:.45 o:.2 p:.3)
         # neuron pruned (50% avg)  122s (0.124s/message), ???mb. (cross-pruning of layer output weight matrix)
         # neuron pruned (50% fix)  134s (0.136s/message), 247mb.
         # neuron pruned (50% fix)  112s (0.113s/message), 220mb. (cross-pruning of layer output weight matrix)
-        # neuron pruned (56.5% avg)105s (0.106s/message), 205mb. (pruning intermed. more: k:0.9 q:0.9 v:0.45 ao:0.25 i:0.6 o:0.2 p:0.3)
+        # neuron pruned (56.5% avg)105s (0.106s/message), 205mb. (pruning intermed. more: k:.9 q:.9 v:.45 ao:.25 i:.6 o:.2 p:.3)
         # neuron pruned (55.9% avg)111s (0.112s/message), 210mb. (everything except k & q pruned *1.2)
+        # neuron pruned (58.5% avg)103s (0.105s/message), 199mb. (everything except k & q pruned *1.2 and i:.6)
 
         start = time.time()
         if self.use_tflite:
