@@ -191,8 +191,8 @@ class BertIntentClassifier(Component):
         # self.session.run(tf.global_variables_initializer())
 
         pbar = tqdm(range(max(self.epochs, 1)), desc="Epochs")
-        train_acc = 0
-        last_loss = 0
+        # train_acc = 0
+        # last_loss = 0
         train_step = 0
         for ep in pbar:
             self.session.run(train_init_op, feed_dict={batch_size_in: batch_size})
@@ -211,7 +211,14 @@ class BertIntentClassifier(Component):
                 ep_loss += batch_loss
 
                 if train_step % 10 == 0:
-                    print ("accuracy", batch_acc, "loss", batch_loss)
+                    print (
+                        "accuracy",
+                        batch_acc,
+                        "loss",
+                        batch_loss,
+                        "train_step",
+                        train_step,
+                    )
 
                 if train_step % self.save_checkpoints_steps == 0:
                     save_path = saver.save(
@@ -227,6 +234,13 @@ class BertIntentClassifier(Component):
             ep_loss /= batches_per_epoch
             pbar.set_postfix({"loss": "{:.3f}".format(ep_loss)})
 
+        save_path = saver.save(
+            sess=self.session,
+            save_path=self.checkpoint_dir + "/model.ckpt",
+            global_step=train_step,
+        )
+        print ("Saved checkpoint for step {}: {}".format(train_step, save_path))
+
     def train(self, training_data, cfg, **kwargs):
         """Train this component."""
 
@@ -241,7 +255,7 @@ class BertIntentClassifier(Component):
         train_examples = get_train_examples(training_data.training_examples)
         num_train_steps = int(len(train_examples) / self.batch_size * self.epochs)
         train_steps_per_epoch = int(len(train_examples) / self.batch_size)
-        min_steps = 2
+        min_steps = 1
         if self.epochs <= 0:
             num_train_steps = min_steps
         print ("RUNNING {} EPOCHS, {} STEPS".format(self.epochs, num_train_steps))
