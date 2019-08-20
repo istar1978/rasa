@@ -177,13 +177,18 @@ class BertIntentClassifier(Component):
         batch_size,
         loss: "tf.Tensor",
         train_op: "tf.Tensor",
+        train_accuracy: "tf.Tensor",
         num_train_steps=None,
     ) -> None:
         """Train tf graph"""
         saver = tf.train.Saver(
             max_to_keep=self.max_checkpoints_to_keep, name="save_training_checkpoints"
         )
-        self.session.run(tf.global_variables_initializer())
+        init = tf.group(
+            tf.global_variables_initializer(), tf.local_variables_initializer()
+        )
+        self.session.run(init)
+        # self.session.run(tf.global_variables_initializer())
 
         pbar = tqdm(range(max(self.epochs, 1)), desc="Epochs")
         train_acc = 0
@@ -195,7 +200,9 @@ class BertIntentClassifier(Component):
             batches_per_epoch = 0
             while num_train_steps is None or batches_per_epoch <= num_train_steps:
                 try:
-                    _, batch_loss = self.session.run((train_op, loss), feed_dict={})
+                    _, batch_loss, batch_acc = self.session.run(
+                        (train_op, loss, train_accuracy), feed_dict={}
+                    )
 
                 except tf.errors.OutOfRangeError:
                     break
@@ -203,21 +210,18 @@ class BertIntentClassifier(Component):
                 batches_per_epoch += 1
                 ep_loss += batch_loss
 
+                if train_step % 10 == 0:
+                    print ("accuracy", batch_acc, "loss", batch_loss)
+
                 if train_step % self.save_checkpoints_steps == 0:
-                    # save_path = manager.save()
                     save_path = saver.save(
                         sess=self.session,
                         save_path=self.checkpoint_dir + "/model.ckpt",
                         global_step=train_step,
                     )
-                    # ckpt.save(
-                    #     self.checkpoint_dir,
-                    #     session=self.session
-                    # )
                     print (
                         "Saved checkpoint for step {}: {}".format(train_step, save_path)
                     )
-                # ckpt.step.assign_add(1)
                 train_step += 1
 
             ep_loss /= batches_per_epoch
@@ -318,7 +322,7 @@ class BertIntentClassifier(Component):
                 )
                 minibatch = iterator.get_next()
                 train_init_op = iterator.make_initializer(train_dataset)
-                train_op, loss, input_tensors, log_probs, predictions = build_model(
+                train_op, loss, input_tensors, log_probs, predictions, train_acc = build_model(
                     features=minibatch,
                     mode="train",
                     params=params,
@@ -329,6 +333,11 @@ class BertIntentClassifier(Component):
                     num_warmup_steps=num_warmup_steps,
                     bert_config=bert_config,
                 )
+
+                writer = tf.summary.FileWriter(
+                    logdir="tfgraph-bert-train", graph=self.graph
+                )
+                writer.flush()
 
                 trainable_vars = self.graph.get_collection(
                     tf.GraphKeys.TRAINABLE_VARIABLES
@@ -354,6 +363,7 @@ class BertIntentClassifier(Component):
                     batch_size=self.batch_size,
                     loss=loss,
                     train_op=train_op,
+                    train_accuracy=train_acc,
                     num_train_steps=(None if self.epochs > 0 else num_train_steps),
                 )
 
@@ -361,10 +371,6 @@ class BertIntentClassifier(Component):
                 self.input_tensors["probabilities"] = log_probs
                 self.input_tensors["predictions"] = predictions
 
-                writer = tf.summary.FileWriter(
-                    logdir="tfgraph-bert-train", graph=self.graph
-                )
-                writer.flush()
                 # exit(0)
             else:
                 train_dataset = build_input_dataset(

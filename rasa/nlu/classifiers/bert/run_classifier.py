@@ -391,10 +391,14 @@ def build_model(
             sparsity_technique=params["sparsity_technique"],
             trained_masks=masks_dict,
         )
+        with g.as_default():
+            with tf.variable_scope("loss", reuse=tf.AUTO_REUSE):
+                accuracy = tf.metrics.accuracy(
+                    labels=label_ids, predictions=predicted_labels, name="accuracy"
+                )
         # [print(v.name) for v in g.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
         # exit(0)
         """
-        accuracy = tf.metrics.accuracy(label_ids, predicted_labels)
         logging_hook = tf.train.LoggingTensorHook(
             {"loss": loss, "accuracy": accuracy[1]}, every_n_iter=1
         )
@@ -641,7 +645,7 @@ def build_model(
                     ),
                 )
 
-            return train_op, loss, input_tensors, log_probs, predicted_labels
+            return train_op, loss, input_tensors, log_probs, predicted_labels, accuracy
         else:
             raise ValueError("'mode' must be either 'train' or 'predict'")
     else:
