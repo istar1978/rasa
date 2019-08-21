@@ -200,8 +200,7 @@ class BertIntentClassifier(Component):
             ep_loss = 0
             batches_per_epoch = 0
             while (self.epochs == 0 and batches_per_epoch < num_train_steps) or (
-                self.epochs > 0 and batches_per_epoch < train_steps_per_epoch
-            ):
+                self.epochs > 0):
                 try:
                     _, batch_loss, batch_acc = self.session.run(
                         (train_op, loss, train_accuracy), feed_dict={}
