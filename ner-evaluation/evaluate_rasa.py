@@ -69,7 +69,7 @@ def create_config(pipeline: List[Dict]) -> RasaNLUModelConfig:
 
 
 def create_output_files(
-    data_set: Text, result_folder: Text = "results"
+    data_set: Text, result_folder: Text = "rasa-results"
 ) -> Tuple[Text, Text, Text]:
     report_folder = os.path.join(result_folder, data_set)
     os.makedirs(report_folder, exist_ok=True)

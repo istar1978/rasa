@@ -91,7 +91,11 @@ def train_model(model_path: Text, data_train: TrainingData):
 
     tag_dictionary = corpus.make_tag_dictionary(tag_type=tag_type)
 
-    embedding_types: List[TokenEmbeddings] = [WordEmbeddings("glove")]
+    embedding_types: List[TokenEmbeddings] = [
+        WordEmbeddings("glove"),
+        FlairEmbeddings("news-forward"),
+        FlairEmbeddings("news-backward"),
+    ]
 
     embeddings: StackedEmbeddings = StackedEmbeddings(embeddings=embedding_types)
 
@@ -112,7 +116,7 @@ def train_model(model_path: Text, data_train: TrainingData):
     trainer: ModelTrainer = ModelTrainer(tagger, corpus)
 
     # 7. start training
-    trainer.train(model_path, learning_rate=0.1, mini_batch_size=32, max_epochs=3)
+    trainer.train(model_path, learning_rate=0.1, mini_batch_size=32, max_epochs=10)
 
 
 def evaluate_model(model_path: Text, test_data: TrainingData) -> Dict:
@@ -156,7 +160,7 @@ def evaluate_model(model_path: Text, test_data: TrainingData) -> Dict:
 
 
 def create_output_files(
-    data_set: Text, result_folder: Text = "results"
+    data_set: Text, result_folder: Text = "flair-results"
 ) -> Tuple[Text, Text, Text]:
     report_folder = os.path.join(result_folder, data_set)
     os.makedirs(report_folder, exist_ok=True)
