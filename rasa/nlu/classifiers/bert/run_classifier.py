@@ -906,7 +906,7 @@ def build_input_dataset(features, seq_length, is_training, drop_remainder, param
     )
 
     if is_training:
-        d = d.repeat()
+        # d = d.repeat()
         d = d.shuffle(buffer_size=100)
 
     d = d.batch(batch_size=batch_size, drop_remainder=drop_remainder)

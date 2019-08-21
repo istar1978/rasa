@@ -179,6 +179,7 @@ class BertIntentClassifier(Component):
         train_op: "tf.Tensor",
         train_accuracy: "tf.Tensor",
         num_train_steps=None,
+        train_steps_per_epoch=None,
     ) -> None:
         """Train tf graph"""
         saver = tf.train.Saver(
@@ -198,7 +199,9 @@ class BertIntentClassifier(Component):
             self.session.run(train_init_op, feed_dict={batch_size_in: batch_size})
             ep_loss = 0
             batches_per_epoch = 0
-            while num_train_steps is None or batches_per_epoch <= num_train_steps:
+            while (self.epochs == 0 and batches_per_epoch < num_train_steps) or (
+                self.epochs > 0 and batches_per_epoch < train_steps_per_epoch
+            ):
                 try:
                     _, batch_loss, batch_acc = self.session.run(
                         (train_op, loss, train_accuracy), feed_dict={}
@@ -212,12 +215,9 @@ class BertIntentClassifier(Component):
 
                 if train_step % 10 == 0:
                     print (
-                        "accuracy",
-                        batch_acc,
-                        "loss",
-                        batch_loss,
-                        "train_step",
-                        train_step,
+                        "accuracy:{:.3f};loss:{:.4f};train_step:{}".format(
+                            batch_acc[0], batch_loss, train_step
+                        )
                     )
 
                 if train_step % self.save_checkpoints_steps == 0:
@@ -378,7 +378,8 @@ class BertIntentClassifier(Component):
                     loss=loss,
                     train_op=train_op,
                     train_accuracy=train_acc,
-                    num_train_steps=(None if self.epochs > 0 else num_train_steps),
+                    num_train_steps=num_train_steps,  # (None if self.epochs > 0 else num_train_steps),
+                    train_steps_per_epoch=train_steps_per_epoch,
                 )
 
                 self.input_tensors = input_tensors
