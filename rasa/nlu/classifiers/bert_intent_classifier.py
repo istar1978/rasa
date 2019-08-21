@@ -253,7 +253,7 @@ class BertIntentClassifier(Component):
         self.label_list = get_labels(training_data)
 
         train_examples = get_train_examples(training_data.training_examples)
-        num_train_steps = int(len(train_examples) / self.batch_size * self.epochs)
+        num_train_steps = int(len(train_examples) / self.batch_size) * self.epochs
         train_steps_per_epoch = int(len(train_examples) / self.batch_size)
         min_steps = 1
         if self.epochs <= 0:
