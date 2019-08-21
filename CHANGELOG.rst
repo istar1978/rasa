@@ -21,8 +21,9 @@ Added
   ``MappingPolicy`` being present in the policy ensemble
 - the tracker is now available within the interpreter's ``parse`` method, giving the ability to create interpreter classes that
   use the tracker state (eg. slot values) during the parsing of the message. More details on motivation of this change see issues/3015
-- ``softmax`` starspace loss for both ``EmbeddingPolicy`` and
-  ``EmbeddingIntentClassifier``
+- ``softmax`` starspace loss for both ``EmbeddingPolicy`` and ``EmbeddingIntentClassifier``
+- ``balanced`` batching strategy for both ``EmbeddingPolicy`` and ``EmbeddingIntentClassifier``
+- ``max_history`` parameter for ``EmbeddingPolicy``
 
 Changed
 -------
@@ -33,6 +34,9 @@ Changed
 - compare mode of ``rasa train core`` allows the whole core config comparison,
   naming style of models trained for comparison is changed (this is a breaking change)
 - pika keeps a single connection open, instead of open and closing on each incoming event
+- ``RasaChatInput`` fetches the public key from the Rasa X API. The key is used to
+  decode the bearer token containing the conversation ID. This requires
+  ``rasa-x>=0.20.2``
 - substitute LSTM with Transformer in ``EmbeddingPolicy``
 - ``EmbeddingPolicy`` can now use ``MaxHistoryTrackerFeaturizer``
 - non zero ``evaluate_on_num_examples`` in ``EmbeddingPolicy``
