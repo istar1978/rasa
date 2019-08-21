@@ -116,7 +116,7 @@ def train_model(model_path: Text, data_train: TrainingData):
     trainer: ModelTrainer = ModelTrainer(tagger, corpus)
 
     # 7. start training
-    trainer.train(model_path, learning_rate=0.1, mini_batch_size=32, max_epochs=10)
+    trainer.train(model_path, learning_rate=0.1, mini_batch_size=16, max_epochs=10)
 
 
 def evaluate_model(model_path: Text, test_data: TrainingData) -> Dict:
@@ -230,18 +230,18 @@ def run(data_path: Text, runs: int = 5, train_frac: float = 0.8):
 
     f = open(configuration_file, "w")
     f.write("CONFIG\n")
-    f.write("runs: {}".format(runs))
-    f.write("training data: {}".format(train_frac))
+    f.write("runs: {}\n".format(runs))
+    f.write("training data: {}\n".format(train_frac))
     f.close()
 
 
 if __name__ == "__main__":
     run("data/AddToPlaylist.json")
-    # run("data/BookRestaurant.json")
-    # run("data/GetWeather.json")
-    # run("data/RateBook.json")
-    # run("data/SearchCreativeWork.json")
-    # run("data/SearchScreeningEvent.json")
-    # run("data/BTC")
-    # run("data/redis")
-    # run("data/WNUT17")
+    run("data/BookRestaurant.json")
+    run("data/GetWeather.json")
+    run("data/RateBook.json")
+    run("data/SearchCreativeWork.json")
+    run("data/SearchScreeningEvent.json")
+    run("data/BTC")
+    run("data/redis")
+    run("data/WNUT17")

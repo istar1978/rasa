@@ -111,7 +111,7 @@ def add_to_report(i, report, report_file):
 def run(
     data_path: Text,
     runs: int = 5,
-    pipeline: List[Dict] = DEFAULT_PIPELINE,
+    pipeline: List[Dict] = SPACY_PIPELINE,
     train_frac: float = 0.8,
 ):
     data_set = os.path.splitext(os.path.basename(data_path))[0]
@@ -144,9 +144,9 @@ def run(
 
     f = open(configuration_file, "w")
     f.write("CONFIG\n")
-    f.write("pipeline: {}".format(pipeline))
-    f.write("runs: {}".format(runs))
-    f.write("training data: {}".format(train_frac))
+    f.write("pipeline: {}\n".format(pipeline))
+    f.write("runs: {}\n".format(runs))
+    f.write("training data: {}\n".format(train_frac))
     f.close()
 
 
