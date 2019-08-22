@@ -5,6 +5,8 @@ from typing import Text, Tuple, List, Dict
 
 from flair.data import Corpus, Sentence, Token
 from flair.embeddings import FlairEmbeddings
+from nlu.extractors.crf_entity_extractor import CRFEntityExtractor
+from nlu.tokenizers.whitespace_tokenizer import WhitespaceTokenizer
 from torch.utils.data import Dataset
 
 from nlu.test import (
@@ -18,21 +20,6 @@ from rasa.nlu import load_data
 from rasa.nlu.model import Trainer, Interpreter
 from rasa.nlu.config import RasaNLUModelConfig
 from rasa.nlu.training_data import TrainingData
-
-
-DEFAULT_PIPELINE = [
-    {"name": "WhitespaceTokenizer"},
-    {"name": "RegexFeaturizer"},
-    {"name": "CRFEntityExtractor"},
-]
-
-SPACY_PIPELINE = [
-    {"name": "SpacyNLP"},
-    {"name": "SpacyTokenizer"},
-    {"name": "SpacyFeaturizer"},
-    {"name": "RegexFeaturizer"},
-    {"name": "CRFEntityExtractor"},
-]
 
 
 class CustomDataset(Dataset):
@@ -77,7 +64,7 @@ def training_data_to_corpus(data_train: TrainingData):
     return Corpus(
         train=CustomDataset(sentences),
         dev=CustomDataset(sentences),
-        test=CustomDataset(sentences),
+        test=CustomDataset([]),
     )
 
 
@@ -93,8 +80,8 @@ def train_model(model_path: Text, data_train: TrainingData):
 
     embedding_types: List[TokenEmbeddings] = [
         WordEmbeddings("glove"),
-        FlairEmbeddings("news-forward"),
-        FlairEmbeddings("news-backward"),
+        # FlairEmbeddings("news-forward"),
+        # FlairEmbeddings("news-backward"),
     ]
 
     embeddings: StackedEmbeddings = StackedEmbeddings(embeddings=embedding_types)
@@ -116,19 +103,43 @@ def train_model(model_path: Text, data_train: TrainingData):
     trainer: ModelTrainer = ModelTrainer(tagger, corpus)
 
     # 7. start training
-    trainer.train(model_path, learning_rate=0.1, mini_batch_size=16, max_epochs=10)
+    trainer.train(model_path, learning_rate=0.1, mini_batch_size=16, max_epochs=2)
 
 
-def evaluate_model(model_path: Text, test_data: TrainingData) -> Dict:
+def get_interpreter(data_train: TrainingData) -> Interpreter:
+    config = RasaNLUModelConfig(
+        configuration_values={
+            "pipeline": [
+                {"name": "WhitespaceTokenizer"},
+                {"name": "RegexFeaturizer"},
+                {"name": "CRFEntityExtractor"},
+            ]
+        }
+    )
+    trainer = Trainer(config)
+    return trainer.train(data_train)
+
+
+def tokenize(text: Text):
+    interpreter = Interpreter([WhitespaceTokenizer(), CRFEntityExtractor()], None)
+    result = interpreter.parse(text)
+    return result.get("tokens", []), result.get("entities", [])
+
+
+def evaluate_model(
+    model_path: Text, test_data: TrainingData, interpreter: Interpreter
+) -> Dict:
     from flair.data import Sentence
     from flair.models import SequenceTagger
 
     tagger = SequenceTagger.load(os.path.join(model_path, "final-model.pt"))
+    interpreter.pipeline = remove_pretrained_extractors(interpreter.pipeline)
 
     entity_results = []
 
     for ex in test_data.training_examples:
-        sentence = Sentence(ex.text)
+        result = interpreter.parse(ex.text, only_output_properties=False)
+        sentence = Sentence(result.get("text"), ex.text)
         tagger.predict(sentence)
 
         spans = sentence.get_spans("ner")
@@ -148,7 +159,7 @@ def evaluate_model(model_path: Text, test_data: TrainingData) -> Dict:
 
         entity_results.append(
             EntityEvaluationResult(
-                ex.get("entities", []), predicted_entities, ex.get("tokens", [])
+                ex.get("entities", []), predicted_entities, result.get("tokens", [])
             )
         )
 
@@ -199,7 +210,7 @@ def add_to_report(i, report, report_file):
     f.close()
 
 
-def run(data_path: Text, runs: int = 5, train_frac: float = 0.8):
+def run(data_path: Text, runs: int = 1, train_frac: float = 0.8):
     data_set = os.path.splitext(os.path.basename(data_path))[0]
     report_file, result_file, configuration_file = create_output_files(
         data_set, "flair-results"
@@ -211,9 +222,10 @@ def run(data_path: Text, runs: int = 5, train_frac: float = 0.8):
 
     for i in range(runs):
         data_train, data_test = load_training_data(data_path, train_frac=train_frac)
+        interpreter = get_interpreter(data_train)
 
         train_model("flair-results/tagger", data_train)
-        result = evaluate_model("flair-results/tagger", data_test)
+        result = evaluate_model("flair-results/tagger", data_test, interpreter)
 
         report = result["report"]
         accuracy_list.append(result["accuracy"])
@@ -243,5 +255,6 @@ if __name__ == "__main__":
     run("data/SearchCreativeWork.json")
     run("data/SearchScreeningEvent.json")
     run("data/BTC")
-    run("data/redis")
+    run("data/re3d")
     run("data/WNUT17")
+    run("data/Ritter.md")

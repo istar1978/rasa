@@ -111,7 +111,7 @@ def add_to_report(i, report, report_file):
 def run(
     data_path: Text,
     runs: int = 5,
-    pipeline: List[Dict] = SPACY_PIPELINE,
+    pipeline: List[Dict] = DEFAULT_PIPELINE,
     train_frac: float = 0.8,
 ):
     data_set = os.path.splitext(os.path.basename(data_path))[0]
@@ -151,12 +151,13 @@ def run(
 
 
 if __name__ == "__main__":
-    run("data/AddToPlaylist.json")
-    run("data/BookRestaurant.json")
-    run("data/GetWeather.json")
-    run("data/RateBook.json")
-    run("data/SearchCreativeWork.json")
-    run("data/SearchScreeningEvent.json")
-    run("data/BTC")
-    run("data/redis")
-    run("data/WNUT17")
+    # run("data/AddToPlaylist.json")
+    # run("data/BookRestaurant.json")
+    # run("data/GetWeather.json")
+    # run("data/RateBook.json")
+    # run("data/SearchCreativeWork.json")
+    # run("data/SearchScreeningEvent.json")
+    # run("data/BTC")
+    # run("data/re3d")
+    # run("data/WNUT17")
+    run("data/Ritter.md")
