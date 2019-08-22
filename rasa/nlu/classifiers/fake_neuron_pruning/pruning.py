@@ -607,8 +607,15 @@ class Pruning(object):
                         ),
                         tf.int32,
                     )
-                    # Sort the entire array
-                    values, _ = tf.math.top_k(local_rank, k=(k - 1))
+                    # If there are at least 2 neurons left, we can afford pruning some of them away.
+                    # If there is only one left, it will stay.
+                    values, _ = tf.cond(
+                        tf.size(local_rank) >= 2,
+                        lambda: tf.math.top_k(local_rank, k=tf.maximum(k - 1, 1)),
+                        lambda: tf.math.top_k(
+                            tf.reduce_min(local_rank, keepdims=True), k=1
+                        ),
+                    )
 
                     # Grab the (k-1) th value
                     new_local_threshold = values[-1]
