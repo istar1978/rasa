@@ -662,6 +662,17 @@ def create_app(
                 "An unexpected error occurred during training. Error: {}".format(e),
             )
 
+    @app.get("/model/train/status")
+    @requires_auth(app, auth_token)
+    async def training_status(request: Request):
+        """Get status of ongoing training jobs."""
+
+        return response.json(
+            {
+                "n_jobs": app.agent.active_training_processes.value
+            }
+        )
+
     def validate_request(rjs):
         if "config" not in rjs:
             raise ErrorResponse(

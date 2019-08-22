@@ -320,7 +320,10 @@ class Agent(object):
 
         # Initialize shared object of type unsigned int for tracking
         # the number of active training processes
-        self.active_training_processes = multiprocessing.Value('I')
+        self._manager = multiprocessing.Manager()
+        self.active_training_processes = self._manager.Value('I', 0)
+        print("Set to 0")
+        input('>>')
 
     def update_model(
         self,
@@ -720,8 +723,12 @@ class Agent(object):
 
         with self.active_training_processes.get_lock():
             self.active_training_processes.value += 1
+
         self.policy_ensemble.train(training_trackers, self.domain, **kwargs)
         self._set_fingerprint()
+
+        with self.active_training_processes.get_lock():
+            self.active_training_processes.value -= 1
 
     def handle_channels(
         self,
