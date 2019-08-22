@@ -238,7 +238,7 @@ class TrainingData(object):
         return data_train, data_test
 
     def print_stats(self) -> None:
-        logger.info(
+        print (
             "Training data stats: \n"
             + "\t- intent examples: {} ({} distinct intents)\n".format(
                 len(self.intent_examples), len(self.intents)

@@ -1,25 +1,35 @@
-import json
 import os
 
-from typing import Text, Tuple, List, Dict
+from typing import Text, List, Dict
 
-from flair.data import Corpus, Sentence, Token
-from flair.embeddings import FlairEmbeddings
+from flair.data import Corpus, Sentence
 from nlu.extractors.crf_entity_extractor import CRFEntityExtractor
 from nlu.tokenizers.whitespace_tokenizer import WhitespaceTokenizer
 from torch.utils.data import Dataset
 
 from nlu.test import (
-    get_eval_data,
-    get_entity_extractors,
     evaluate_entities,
     remove_pretrained_extractors,
     EntityEvaluationResult,
 )
-from rasa.nlu import load_data
 from rasa.nlu.model import Trainer, Interpreter
 from rasa.nlu.config import RasaNLUModelConfig
 from rasa.nlu.training_data import TrainingData
+
+from utils import (
+    create_output_files,
+    load_training_data,
+    add_to_report,
+    write_results,
+    write_config,
+)
+
+
+DEFAULT_PIPELINE = [
+    {"name": "WhitespaceTokenizer"},
+    {"name": "RegexFeaturizer"},
+    {"name": "CRFEntityExtractor"},
+]
 
 
 class CustomDataset(Dataset):
@@ -31,19 +41,6 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, index: int = 0) -> Sentence:
         return self.sentences[index]
-
-
-def load_training_data(
-    path: Text, keep_split: bool = False, train_frac: float = 0.8
-) -> Tuple[TrainingData, TrainingData]:
-    if keep_split and os.path.isdir(path):
-        data_train = load_data(os.path.join(path, "train.md"))
-        data_test = load_data(os.path.join(path, "test.md"))
-    else:
-        training_data = load_data(path)
-        data_train, data_test = training_data.train_test_split(train_frac)
-
-    return data_train, data_test
 
 
 def training_data_to_corpus(data_train: TrainingData):
@@ -103,7 +100,7 @@ def train_model(model_path: Text, data_train: TrainingData):
     trainer: ModelTrainer = ModelTrainer(tagger, corpus)
 
     # 7. start training
-    trainer.train(model_path, learning_rate=0.1, mini_batch_size=16, max_epochs=2)
+    trainer.train(model_path, learning_rate=0.1, mini_batch_size=16, max_epochs=1)
 
 
 def get_interpreter(data_train: TrainingData) -> Interpreter:
@@ -139,7 +136,9 @@ def evaluate_model(
 
     for ex in test_data.training_examples:
         result = interpreter.parse(ex.text, only_output_properties=False)
-        sentence = Sentence(result.get("text"), ex.text)
+        text = " ".join([t.text.strip() for t in result.get("tokens")])
+
+        sentence = Sentence(text)
         tagger.predict(sentence)
 
         spans = sentence.get_spans("ner")
@@ -170,50 +169,10 @@ def evaluate_model(
     return {}
 
 
-def create_output_files(
-    data_set: Text, result_folder: Text = "flair-results"
-) -> Tuple[Text, Text, Text]:
-    report_folder = os.path.join(result_folder, data_set)
-    os.makedirs(report_folder, exist_ok=True)
-
-    report_file = os.path.join(report_folder, "report.txt")
-    if os.path.exists(report_file):
-        os.remove(report_file)
-
-    result_file = os.path.join(report_folder, "results.txt")
-    if os.path.exists(result_file):
-        os.remove(result_file)
-
-    configuration_file = os.path.join(report_folder, "config.txt")
-    if os.path.exists(configuration_file):
-        os.remove(configuration_file)
-
-    return report_file, result_file, configuration_file
-
-
-def write_results(accuracy, f1_score, precision, result_file):
-    f = open(result_file, "a")
-    f.write("RESULTS\n")
-    f.write("accuracy: {}\n".format(str(accuracy)))
-    f.write("f1_score: {}\n".format(str(f1_score)))
-    f.write("precision: {}\n".format(str(precision)))
-    f.close()
-
-
-def add_to_report(i, report, report_file):
-    f = open(report_file, "a")
-    f.write("#" * 100)
-    f.write("\n")
-    f.write("RUN {}\n\n".format(i))
-    f.write(report)
-    f.write("\n\n")
-    f.close()
-
-
 def run(data_path: Text, runs: int = 1, train_frac: float = 0.8):
     data_set = os.path.splitext(os.path.basename(data_path))[0]
     report_file, result_file, configuration_file = create_output_files(
-        data_set, "flair-results"
+        data_set, result_folder="results/flair/"
     )
 
     accuracy_list = []
@@ -222,6 +181,7 @@ def run(data_path: Text, runs: int = 1, train_frac: float = 0.8):
 
     for i in range(runs):
         data_train, data_test = load_training_data(data_path, train_frac=train_frac)
+
         interpreter = get_interpreter(data_train)
 
         train_model("flair-results/tagger", data_train)
@@ -232,19 +192,14 @@ def run(data_path: Text, runs: int = 1, train_frac: float = 0.8):
         f1_score_list.append(result["f1_score"])
         precision_list.append(result["precision"])
 
-        add_to_report(i, report, report_file)
+        add_to_report(report_file, i, report)
 
     accuracy = sum(accuracy_list) / len(accuracy_list)
     precision = sum(precision_list) / len(precision_list)
     f1_score = sum(f1_score_list) / len(f1_score_list)
 
-    write_results(accuracy, f1_score, precision, result_file)
-
-    f = open(configuration_file, "w")
-    f.write("CONFIG\n")
-    f.write("runs: {}\n".format(runs))
-    f.write("training data: {}\n".format(train_frac))
-    f.close()
+    write_results(result_file, accuracy, f1_score, precision)
+    write_config(configuration_file, runs, train_frac)
 
 
 if __name__ == "__main__":
