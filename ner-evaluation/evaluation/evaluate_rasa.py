@@ -20,6 +20,7 @@ from utils import (
     write_config,
 )
 
+
 DEFAULT_PIPELINE = [
     {"name": "WhitespaceTokenizer"},
     {"name": "RegexFeaturizer"},
@@ -61,11 +62,12 @@ def run(
     data_path: Text,
     runs: int = 5,
     pipeline: List[Dict] = DEFAULT_PIPELINE,
+    pipeline_name: Text = "default_pipeline",
     train_frac: float = 0.8,
 ):
     data_set = os.path.splitext(os.path.basename(data_path))[0]
     report_file, result_file, configuration_file = create_output_files(
-        data_set, result_folder="results/rasa/"
+        data_set, result_folder="results/rasa/{}/".format(pipeline_name)
     )
 
     accuracy_list = []
@@ -94,14 +96,20 @@ def run(
 
 
 if __name__ == "__main__":
-    run("data/new/WNUT17/data.md")
-    # run("data/AddToPlaylist.json")
-    # run("data/BookRestaurant.json")
-    # run("data/GetWeather.json")
-    # run("data/RateBook.json")
-    # run("data/SearchCreativeWork.json")
-    # run("data/SearchScreeningEvent.json")
-    # run("data/BTC")
-    # run("data/re3d")
-    # run("data/WNUT17")
-    # run("data/Ritter.md")
+    data_sets = [
+        "data/AddToPlaylist.json",
+        "data/BookRestaurant.json",
+        "data/BookRestaurant.json",
+        "data/GetWeather.json",
+        "data/RateBook.json",
+        "data/SearchCreativeWork.json",
+        "data/SearchScreeningEvent.json",
+        "data/BTC.md",
+        "data/re3d.md",
+        "data/WNUT17.md",
+        "data/Ritter.md",
+    ]
+
+    for data_set in data_sets:
+        run(data_set, pipeline=DEFAULT_PIPELINE, pipeline_name="default_pipeline")
+        run(data_set, pipeline=SPACY_PIPELINE, pipeline_name="spacy_pipeline")

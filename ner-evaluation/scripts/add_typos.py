@@ -35,10 +35,10 @@ def misspell(word: Text):
 
 
 def run(data_path: Text):
+    print ("Processing file '{}'".format(data_path))
+
     data_set = os.path.splitext(os.path.basename(data_path))[0]
-    out_folder = os.path.join("data", "new", data_set)
-    out_file = os.path.join(out_folder, "data.md")
-    os.makedirs(out_folder, exist_ok=True)
+    out_file = os.path.join("data", "typo_{}.md".format(data_set))
 
     f = open(out_file, "w")
     f.write("## intent:examples")
@@ -57,20 +57,24 @@ def run(data_path: Text):
         entity_index = 0
         entity = entities[entity_index] if entities else None
         start_entity = False
-        end_entity = False
-        entity_value = None
-        entity_tag = None
 
         for token in tokens:
             new_token = token
 
+            if entity and offset >= entity["end"]:
+                entity_index += 1
+                new_tokens[-1] = "{}]({}:{})".format(
+                    new_tokens[-1], entity["entity"], entity["value"]
+                )
+
+            entity = (
+                entities[entity_index]
+                if entities and entity_index < len(entities)
+                else None
+            )
+
             if entity and offset == entity["start"]:
                 start_entity = True
-            if entity and offset >= entity["end"]:
-                end_entity = True
-                entity_value = entity["value"]
-                entity_tag = entity["entity"]
-                entity_index += 1
 
             entity = (
                 entities[entity_index]
@@ -89,14 +93,13 @@ def run(data_path: Text):
             if start_entity:
                 new_token = "[" + new_token
                 start_entity = False
-            if end_entity:
-                new_tokens[-1] = "{}]({}:{})".format(
-                    new_tokens[-1], entity_tag, entity_value
-                )
-                entity_value = None
-                end_entity = False
 
             new_tokens.append(new_token)
+
+        if entity and offset >= entity["end"]:
+            new_tokens[-1] = "{}]({}:{})".format(
+                new_tokens[-1], entity["entity"], entity["value"]
+            )
 
         text = " ".join(new_tokens)
 
@@ -108,4 +111,13 @@ def run(data_path: Text):
 
 
 if __name__ == "__main__":
-    run("data/WNUT17")
+    run("data/AddToPlaylist.json")
+    run("data/BonnerokRestaurant.json")
+    run("data/GetWeather.json")
+    run("data/RateBook.json")
+    run("data/SearchCreativeWork.json")
+    run("data/SearchScreeningEvent.json")
+    run("data/BTC.md")
+    run("data/re3d.md")
+    run("data/WNUT17.md")
+    run("data/Ritter.md")

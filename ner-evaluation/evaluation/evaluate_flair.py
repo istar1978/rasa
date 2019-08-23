@@ -205,13 +205,19 @@ def run(data_path: Text, runs: int = 5, train_frac: float = 0.8):
 
 
 if __name__ == "__main__":
-    run("data/AddToPlaylist.json")
-    run("data/BookRestaurant.json")
-    run("data/GetWeather.json")
-    run("data/RateBook.json")
-    run("data/SearchCreativeWork.json")
-    run("data/SearchScreeningEvent.json")
-    run("data/BTC")
-    run("data/re3d")
-    run("data/WNUT17")
-    run("data/Ritter.md")
+    data_sets = [
+        "data/AddToPlaylist.json",
+        "data/BookRestaurant.json",
+        "data/BookRestaurant.json",
+        "data/GetWeather.json",
+        "data/RateBook.json",
+        "data/SearchCreativeWork.json",
+        "data/SearchScreeningEvent.json",
+        "data/BTC.md",
+        "data/re3d.md",
+        "data/WNUT17.md",
+        "data/Ritter.md",
+    ]
+
+    for data_set in data_sets:
+        run(data_set)
