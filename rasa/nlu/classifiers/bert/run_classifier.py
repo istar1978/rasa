@@ -314,7 +314,7 @@ def pruning_hparams(hparams):  # pylint: disable=unused-argument
         name="model_pruning",
         threshold_decay=0.0,
         initial_sparsity=0.0,
-        sparsity_function_exponent=1,
+        sparsity_function_exponent=hparams.get("sparsity_function_exponent", 1),
         use_tpu=False,
         block_height=1,
         block_width=1,
@@ -539,14 +539,16 @@ def build_model(
                         # )
                         sparsity_map = build_sparsity_map(
                             g,
-                            keys=0.9,
-                            queries=0.9,
-                            values=0.45,
-                            att_outputs=0.25,
-                            intermediates=0.6,
-                            outputs=0.2,
-                            pooler=0.3,
+                            keys=0.9999,
+                            queries=0.9999,
+                            values=0.9999,
+                            att_outputs=0.9999,
+                            intermediates=0.0,
+                            outputs=0.0,
+                            pooler=0.0,
                         )
+                        sparsity_map = None
+                        print (sparsity_map)
                         # c = 1.2
                         # sparsity_map = build_sparsity_map(
                         #     g,

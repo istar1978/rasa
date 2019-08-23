@@ -60,6 +60,7 @@ class BertIntentClassifier(Component):
         "hat_layer_in_checkpoint": False,
         "use_tflite": False,
         "sparsity_technique": None,
+        "sparsity_function_exponent": 1,
         "target_sparsity": 0.5,
         "begin_pruning_epoch": 0,
         "end_pruning_epoch": 2,
@@ -108,6 +109,7 @@ class BertIntentClassifier(Component):
             "load_pruning_masks_from_checkpoint"
         ]
         self.resize_pruned_matrices = config["resize_pruned_matrices"]
+        self.sparsity_function_exponent = config["sparsity_function_exponent"]
 
     def _load_train_params(self, config: Dict[Text, Any]) -> None:
         self.batch_size = config["batch_size"]
@@ -200,7 +202,8 @@ class BertIntentClassifier(Component):
             ep_loss = 0
             batches_per_epoch = 0
             while (self.epochs == 0 and batches_per_epoch < num_train_steps) or (
-                self.epochs > 0):
+                self.epochs > 0
+            ):
                 try:
                     _, batch_loss, batch_acc = self.session.run(
                         (train_op, loss, train_accuracy), feed_dict={}
@@ -254,7 +257,7 @@ class BertIntentClassifier(Component):
         train_examples = get_train_examples(training_data.training_examples)
         num_train_steps = int(len(train_examples) / self.batch_size) * self.epochs
         train_steps_per_epoch = int(len(train_examples) / self.batch_size)
-        min_steps = 1
+        min_steps = 4
         if self.epochs <= 0:
             num_train_steps = min_steps
         print ("RUNNING {} EPOCHS, {} STEPS".format(self.epochs, num_train_steps))
@@ -314,6 +317,7 @@ class BertIntentClassifier(Component):
                 "target_sparsity": self.target_sparsity,
                 "resize_pruned_matrices": self.resize_pruned_matrices,
                 "checkpoint_for_pruning_masks": self.warm_start_checkpoint,
+                "sparsity_function_exponent": self.sparsity_function_exponent,
             },
             "finetune_hat_only": self.finetune_hat_only,
         }
@@ -478,7 +482,7 @@ class BertIntentClassifier(Component):
         # full (bare)              141s (0.143s/message), 406mb.
         # neuron pruned (0% avg)   156s (0.158s/message), 406mb. (measured the overhead created by scattering things)
         # neuron pruned (50% avg)  142s (0.144s/message), 271mb. (k:.9 q:.9 v:.45 ao:.25 i:.45 o:.2 p:.3)
-        # neuron pruned (50% avg)  122s (0.124s/message), ???mb. (cross-pruning of layer output weight matrix)
+        # neuron pruned (50% avg)  122s (0.124s/message), 226mb. (cross-pruning of layer output weight matrix)
         # neuron pruned (50% fix)  134s (0.136s/message), 247mb.
         # neuron pruned (50% fix)  112s (0.113s/message), 220mb. (cross-pruning of layer output weight matrix)
         # neuron pruned (56.5% avg)105s (0.106s/message), 205mb. (pruning intermed. more: k:.9 q:.9 v:.45 ao:.25 i:.6 o:.2 p:.3)
