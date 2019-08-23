@@ -59,7 +59,7 @@ def evaluate_model(interpreter: Interpreter, test_data: TrainingData) -> Dict:
 
 def run(
     data_path: Text,
-    runs: int = 1,
+    runs: int = 5,
     pipeline: List[Dict] = DEFAULT_PIPELINE,
     train_frac: float = 0.8,
 ):
@@ -94,13 +94,14 @@ def run(
 
 
 if __name__ == "__main__":
-    run("data/AddToPlaylist.json")
-    run("data/BookRestaurant.json")
-    run("data/GetWeather.json")
-    run("data/RateBook.json")
-    run("data/SearchCreativeWork.json")
-    run("data/SearchScreeningEvent.json")
-    run("data/BTC")
-    run("data/re3d")
-    run("data/WNUT17")
-    run("data/Ritter.md")
+    run("data/new/WNUT17/data.md")
+    # run("data/AddToPlaylist.json")
+    # run("data/BookRestaurant.json")
+    # run("data/GetWeather.json")
+    # run("data/RateBook.json")
+    # run("data/SearchCreativeWork.json")
+    # run("data/SearchScreeningEvent.json")
+    # run("data/BTC")
+    # run("data/re3d")
+    # run("data/WNUT17")
+    # run("data/Ritter.md")
