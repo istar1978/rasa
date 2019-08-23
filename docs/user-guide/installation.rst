@@ -59,6 +59,8 @@ Otherwise, proceed with the instructions below to install them.
 
     .. tab:: Ubuntu
 
+        Fetch the relevant packages using ``apt``, and install virtualenv using ``pip``.
+
         .. code-block:: bash
 
             $ sudo apt update
@@ -92,6 +94,8 @@ Otherwise, proceed with the instructions below to install them.
             href="https://visualstudio.microsoft.com/visual-cpp-build-tools/"
             target="_blank">Visual Studio</a>. Download the installer and select
             VC++ Build tools in the list.
+
+        Install `Python 3 <https://www.python.org/downloads/windows/>`_ (64-bit version) for Windows.
 
         .. code-block:: bat
 
@@ -233,13 +237,10 @@ memory to run, but will somewhat reduce intent classification performance.
 First Alternative: Tensorflow
 -----------------------------
 
-To use the ``supervised_embeddings`` pipeline you will need to install
-Tensorflow and, for entity recognition, the sklearn-crfsuite library.
-To do this, simply run the following command:
-
-.. code-block:: bash
-
-    $ pip install rasa
+The ``supervised_embeddings`` pipeline uses TensorFlow and the sklearn-crfsuite
+library as dependencies. However, these are installed automatically along
+with a standard Rasa installation, so you do not have to install anything
+separately.
 
 
 .. _install-mitie:
