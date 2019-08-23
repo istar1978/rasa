@@ -3,6 +3,7 @@ import os
 from typing import Text, List, Dict
 
 from flair.data import Corpus, Sentence
+from flair.embeddings import FlairEmbeddings
 from nlu.extractors.crf_entity_extractor import CRFEntityExtractor
 from nlu.tokenizers.whitespace_tokenizer import WhitespaceTokenizer
 from torch.utils.data import Dataset
@@ -77,8 +78,8 @@ def train_model(model_path: Text, data_train: TrainingData):
 
     embedding_types: List[TokenEmbeddings] = [
         WordEmbeddings("glove"),
-        # FlairEmbeddings("news-forward"),
-        # FlairEmbeddings("news-backward"),
+        FlairEmbeddings("news-forward"),
+        FlairEmbeddings("news-backward"),
     ]
 
     embeddings: StackedEmbeddings = StackedEmbeddings(embeddings=embedding_types)
@@ -100,7 +101,7 @@ def train_model(model_path: Text, data_train: TrainingData):
     trainer: ModelTrainer = ModelTrainer(tagger, corpus)
 
     # 7. start training
-    trainer.train(model_path, learning_rate=0.1, mini_batch_size=16, max_epochs=1)
+    trainer.train(model_path, learning_rate=0.1, mini_batch_size=16, max_epochs=10)
 
 
 def get_interpreter(data_train: TrainingData) -> Interpreter:
@@ -169,7 +170,7 @@ def evaluate_model(
     return {}
 
 
-def run(data_path: Text, runs: int = 1, train_frac: float = 0.8):
+def run(data_path: Text, runs: int = 5, train_frac: float = 0.8):
     data_set = os.path.splitext(os.path.basename(data_path))[0]
     report_file, result_file, configuration_file = create_output_files(
         data_set, result_folder="results/flair/"
@@ -184,8 +185,9 @@ def run(data_path: Text, runs: int = 1, train_frac: float = 0.8):
 
         interpreter = get_interpreter(data_train)
 
-        train_model("flair-results/tagger", data_train)
-        result = evaluate_model("flair-results/tagger", data_test, interpreter)
+        tagger_folder = os.path.join("results", "flair", data_set, "tagger")
+        train_model(tagger_folder, data_train)
+        result = evaluate_model(tagger_folder, data_test, interpreter)
 
         report = result["report"]
         accuracy_list.append(result["accuracy"])
