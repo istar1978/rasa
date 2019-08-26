@@ -33,7 +33,6 @@ SPACY_PIPELINE = [
 SPACY_NER_PIPELINE = [
     {"name": "SpacyNLP"},
     {"name": "SpacyTokenizer"},
-    {"name": "SpacyFeaturizer"},
     {"name": "SpacyEntityExtractor"},
 ]
 
@@ -51,13 +50,14 @@ def evaluate_model(interpreter: Interpreter, test_data: TrainingData) -> Dict:
 
     _, entity_results = get_eval_data(interpreter, test_data)
 
+    extractors = get_entity_extractors(interpreter)
+
     if entity_results:
-        extractors = get_entity_extractors(interpreter)
         result["entity_evaluation"] = evaluate_entities(
             entity_results, extractors, None
         )
 
-    return result["entity_evaluation"]["CRFEntityExtractor"]
+    return result["entity_evaluation"][extractors.pop()]
 
 
 def run(
@@ -100,16 +100,16 @@ def run(
 if __name__ == "__main__":
     data_sets = [
         "data/AddToPlaylist.json",
-        # "data/BookRestaurant.json",
-        # "data/BookRestaurant.json",
-        # "data/GetWeather.json",
-        # "data/RateBook.json",
-        # "data/SearchCreativeWork.json",
-        # "data/SearchScreeningEvent.json",
-        # "data/BTC.md",
-        # "data/re3d.md",
-        # "data/WNUT17.md",
-        # "data/Ritter.md",
+        "data/BookRestaurant.json",
+        "data/BookRestaurant.json",
+        "data/GetWeather.json",
+        "data/RateBook.json",
+        "data/SearchCreativeWork.json",
+        "data/SearchScreeningEvent.json",
+        "data/BTC.md",
+        "data/re3d.md",
+        "data/WNUT17.md",
+        "data/Ritter.md",
         # # typo
         # "data/typo_AddToPlaylist.json",
         # "data/typo_BookRestaurant.json",
