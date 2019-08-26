@@ -21,18 +21,20 @@ from utils import (
 )
 
 
-DEFAULT_PIPELINE = [
-    {"name": "WhitespaceTokenizer"},
-    {"name": "RegexFeaturizer"},
-    {"name": "CRFEntityExtractor"},
-]
+DEFAULT_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "CRFEntityExtractor"}]
 
 SPACY_PIPELINE = [
     {"name": "SpacyNLP"},
     {"name": "SpacyTokenizer"},
     {"name": "SpacyFeaturizer"},
-    {"name": "RegexFeaturizer"},
     {"name": "CRFEntityExtractor"},
+]
+
+SPACY_NER_PIPELINE = [
+    {"name": "SpacyNLP"},
+    {"name": "SpacyTokenizer"},
+    {"name": "SpacyFeaturizer"},
+    {"name": "SpacyEntityExtractor"},
 ]
 
 
@@ -98,18 +100,31 @@ def run(
 if __name__ == "__main__":
     data_sets = [
         "data/AddToPlaylist.json",
-        "data/BookRestaurant.json",
-        "data/BookRestaurant.json",
-        "data/GetWeather.json",
-        "data/RateBook.json",
-        "data/SearchCreativeWork.json",
-        "data/SearchScreeningEvent.json",
-        "data/BTC.md",
-        "data/re3d.md",
-        "data/WNUT17.md",
-        "data/Ritter.md",
+        # "data/BookRestaurant.json",
+        # "data/BookRestaurant.json",
+        # "data/GetWeather.json",
+        # "data/RateBook.json",
+        # "data/SearchCreativeWork.json",
+        # "data/SearchScreeningEvent.json",
+        # "data/BTC.md",
+        # "data/re3d.md",
+        # "data/WNUT17.md",
+        # "data/Ritter.md",
+        # # typo
+        # "data/typo_AddToPlaylist.json",
+        # "data/typo_BookRestaurant.json",
+        # "data/typo_BookRestaurant.json",
+        # "data/typo_GetWeather.json",
+        # "data/typo_RateBook.json",
+        # "data/typo_SearchCreativeWork.json",
+        # "data/typo_SearchScreeningEvent.json",
+        # "data/typo_BTC.md",
+        # "data/typo_re3d.md",
+        # "data/typo_WNUT17.md",
+        # "data/typo_Ritter.md",
     ]
 
     for data_set in data_sets:
-        run(data_set, pipeline=DEFAULT_PIPELINE, pipeline_name="default_pipeline")
-        run(data_set, pipeline=SPACY_PIPELINE, pipeline_name="spacy_pipeline")
+        # run(data_set, pipeline=DEFAULT_PIPELINE, pipeline_name="default_pipeline")
+        # run(data_set, pipeline=SPACY_PIPELINE, pipeline_name="spacy_pipeline")
+        run(data_set, pipeline=SPACY_NER_PIPELINE, pipeline_name="spacy_ner_pipeline")

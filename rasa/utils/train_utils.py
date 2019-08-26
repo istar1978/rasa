@@ -48,10 +48,10 @@ except Exception:
 SessionData = namedtuple("SessionData", ("X", "Y", "label_ids"))
 
 
-def load_tf_config(config: Dict[Text, Any]) -> Optional[tf.ConfigProto]:
+def load_tf_config(config: Dict[Text, Any]) -> Optional[tf.compat.v1.ConfigProto]:
     """Prepare tf.ConfigProto for training"""
     if config.get("tf_config") is not None:
-        return tf.ConfigProto(**config.pop("tf_config"))
+        return tf.compat.v1.ConfigProto(**config.pop("tf_config"))
     else:
         return None
 
