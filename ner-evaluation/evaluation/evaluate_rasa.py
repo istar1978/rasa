@@ -77,7 +77,7 @@ def run(
     data_set = os.path.basename(data_path)
     result_folder = "results/rasa/{}".format(pipeline_name)
     report_folder, report_file, result_file, configuration_file = create_output_files(
-        data_set, result_folder=result_folder
+        data_set, result_folder, runs, train_frac, typo
     )
 
     accuracy_list = []
@@ -128,16 +128,18 @@ if __name__ == "__main__":
     ]
 
     for typo in [False, True]:
-        for pipeline, pipeline_name in pipelines:
-            for data_set in data_sets:
-                try:
-                    run(
-                        data_set,
-                        pipeline=pipeline,
-                        pipeline_name=pipeline_name,
-                        typo=typo,
-                    )
-                except Exception as e:
-                    print ("#" * 100)
-                    traceback.print_exc()
-                    print ("#" * 100)
+        for train_frac in [0.5, 0.8]:
+            for pipeline, pipeline_name in pipelines:
+                for data_set in data_sets:
+                    try:
+                        run(
+                            data_set,
+                            pipeline=pipeline,
+                            pipeline_name=pipeline_name,
+                            typo=typo,
+                            train_frac=train_frac,
+                        )
+                    except Exception as e:
+                        print ("#" * 100)
+                        traceback.print_exc()
+                        print ("#" * 100)

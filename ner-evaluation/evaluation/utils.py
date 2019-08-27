@@ -34,9 +34,15 @@ def load_training_data(
 
 
 def create_output_files(
-    data_set: Text, result_folder: Text = "results"
+    data_set: Text,
+    result_folder: Text = "results",
+    runs: int = 5,
+    train_frac: float = 0.8,
+    typo: bool = False,
 ) -> Tuple[Text, Text, Text]:
-    report_folder = os.path.join(result_folder, data_set)
+    name = "{}x{}x{}x{}".format(data_set, typo, train_frac, runs)
+
+    report_folder = os.path.join(result_folder, name)
     os.makedirs(report_folder, exist_ok=True)
 
     report_file = os.path.join(report_folder, "report.txt")
