@@ -101,7 +101,7 @@ class SpacyEntityExtractor(EntityExtractor):
                     self.spacy_nlp.update(
                         [text],  # batch of texts
                         [annotations],  # batch of annotations
-                        drop=0.2,  # dropout - make it harder to memorise data
+                        drop=0.6,  # dropout - make it harder to memorise data
                         sgd=optimizer,  # callable to update weights
                         losses=losses,
                     )

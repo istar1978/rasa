@@ -67,6 +67,8 @@ def run(
     pipeline_name: Text = "default_pipeline",
     train_frac: float = 0.8,
 ):
+    print ("Evaluating pipeline '{}' on dataset '{}'.".format(pipeline_name, data_path))
+
     data_set = os.path.splitext(os.path.basename(data_path))[0]
     report_file, result_file, configuration_file = create_output_files(
         data_set, result_folder="results/rasa/{}/".format(pipeline_name)
@@ -101,7 +103,6 @@ if __name__ == "__main__":
     data_sets = [
         "data/AddToPlaylist.json",
         "data/BookRestaurant.json",
-        "data/BookRestaurant.json",
         "data/GetWeather.json",
         "data/RateBook.json",
         "data/SearchCreativeWork.json",
@@ -110,21 +111,35 @@ if __name__ == "__main__":
         "data/re3d.md",
         "data/WNUT17.md",
         "data/Ritter.md",
-        # # typo
-        # "data/typo_AddToPlaylist.json",
-        # "data/typo_BookRestaurant.json",
-        # "data/typo_BookRestaurant.json",
-        # "data/typo_GetWeather.json",
-        # "data/typo_RateBook.json",
-        # "data/typo_SearchCreativeWork.json",
-        # "data/typo_SearchScreeningEvent.json",
-        # "data/typo_BTC.md",
-        # "data/typo_re3d.md",
-        # "data/typo_WNUT17.md",
-        # "data/typo_Ritter.md",
+        # typo
+        "data/typo_AddToPlaylist.json",
+        "data/typo_BookRestaurant.json",
+        "data/typo_GetWeather.json",
+        "data/typo_RateBook.json",
+        "data/typo_SearchCreativeWork.json",
+        "data/typo_SearchScreeningEvent.json",
+        "data/typo_BTC.md",
+        "data/typo_re3d.md",
+        "data/typo_WNUT17.md",
+        "data/typo_Ritter.md",
     ]
 
     for data_set in data_sets:
-        # run(data_set, pipeline=DEFAULT_PIPELINE, pipeline_name="default_pipeline")
-        # run(data_set, pipeline=SPACY_PIPELINE, pipeline_name="spacy_pipeline")
-        run(data_set, pipeline=SPACY_NER_PIPELINE, pipeline_name="spacy_ner_pipeline")
+        try:
+            run(data_set, pipeline=DEFAULT_PIPELINE, pipeline_name="default_pipeline")
+        except Exception as e:
+            print (e)
+
+        try:
+            run(data_set, pipeline=SPACY_PIPELINE, pipeline_name="spacy_pipeline")
+        except Exception as e:
+            print (e)
+
+        try:
+            run(
+                data_set,
+                pipeline=SPACY_NER_PIPELINE,
+                pipeline_name="spacy_ner_pipeline",
+            )
+        except Exception as e:
+            print (e)
