@@ -37,8 +37,9 @@ def misspell(word: Text):
 def run(data_path: Text):
     print ("Processing file '{}'".format(data_path))
 
-    data_set = os.path.splitext(os.path.basename(data_path))[0]
-    out_file = os.path.join("data", "typo_{}.md".format(data_set))
+    file_name = os.path.splitext(os.path.basename(data_path))[0]
+    data_set = os.path.basename(os.path.dirname(data_path))
+    out_file = os.path.join("data", data_set, "typo_{}.md".format(file_name))
 
     f = open(out_file, "w")
     f.write("## intent:examples")
@@ -112,16 +113,21 @@ def run(data_path: Text):
 
 if __name__ == "__main__":
     data_sets = [
-        "data/AddToPlaylist.json",
-        "data/BookRestaurant.json",
-        "data/GetWeather.json",
-        "data/RateBook.json",
-        "data/SearchCreativeWork.json",
-        "data/SearchScreeningEvent.json",
-        "data/BTC.md",
-        "data/re3d.md",
-        "data/WNUT17.md",
-        "data/Ritter.md",
+        # "data/AddToPlaylist/AddToPlaylist.json",
+        # "data/BookRestaurant/BookRestaurant.json",
+        # "data/GetWeather/GetWeather.json",
+        # "data/RateBook/RateBook.json",
+        # "data/SearchCreativeWork/SearchCreativeWork.json",
+        # "data/SearchScreeningEvent/SearchScreeningEvent.json",
+        # "data/BTC/BTC.md",
+        # "data/re3d/test.md",
+        # "data/re3d/train.md",
+        # "data/WNUT17/test.md",
+        # "data/WNUT17/dev.md",
+        # "data/WNUT17/train.md",
+        # "data/Ritter/test.md",
+        # "data/Ritter/dev.md",
+        "data/Ritter/train.md"
     ]
 
     for data_set in data_sets:

@@ -1,4 +1,5 @@
 import os
+import traceback
 
 from typing import Text, List, Dict
 
@@ -19,7 +20,7 @@ from utils import (
     write_results,
     write_config,
 )
-
+from rasa.utils.common import set_log_level
 
 DEFAULT_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "CRFEntityExtractor"}]
 
@@ -43,7 +44,9 @@ def train_model(pipeline: List[Dict], data_train: TrainingData) -> Interpreter:
     return trainer.train(data_train)
 
 
-def evaluate_model(interpreter: Interpreter, test_data: TrainingData) -> Dict:
+def evaluate_model(
+    interpreter: Interpreter, test_data: TrainingData, result_folder: Text
+) -> Dict:
     interpreter.pipeline = remove_pretrained_extractors(interpreter.pipeline)
 
     result = {"entity_evaluation": None}
@@ -54,7 +57,7 @@ def evaluate_model(interpreter: Interpreter, test_data: TrainingData) -> Dict:
 
     if entity_results:
         result["entity_evaluation"] = evaluate_entities(
-            entity_results, extractors, None
+            entity_results, extractors, output_directory=result_folder, errors=True
         )
 
     return result["entity_evaluation"][extractors.pop()]
@@ -66,12 +69,15 @@ def run(
     pipeline: List[Dict] = DEFAULT_PIPELINE,
     pipeline_name: Text = "default_pipeline",
     train_frac: float = 0.8,
+    typo: bool = False,
 ):
+    set_log_level(30)
     print ("Evaluating pipeline '{}' on dataset '{}'.".format(pipeline_name, data_path))
 
-    data_set = os.path.splitext(os.path.basename(data_path))[0]
-    report_file, result_file, configuration_file = create_output_files(
-        data_set, result_folder="results/rasa/{}/".format(pipeline_name)
+    data_set = os.path.basename(data_path)
+    result_folder = "results/rasa/{}".format(pipeline_name)
+    report_folder, report_file, result_file, configuration_file = create_output_files(
+        data_set, result_folder=result_folder
     )
 
     accuracy_list = []
@@ -79,10 +85,12 @@ def run(
     precision_list = []
 
     for i in range(runs):
-        data_train, data_test = load_training_data(data_path, train_frac=train_frac)
+        data_train, data_test = load_training_data(
+            data_path, train_frac=train_frac, typo=typo
+        )
 
         interpreter = train_model(pipeline, data_train)
-        result = evaluate_model(interpreter, data_test)
+        result = evaluate_model(interpreter, data_test, report_folder)
 
         report = result["report"]
         accuracy_list.append(result["accuracy"])
@@ -101,45 +109,35 @@ def run(
 
 if __name__ == "__main__":
     data_sets = [
-        "data/AddToPlaylist.json",
-        "data/BookRestaurant.json",
-        "data/GetWeather.json",
-        "data/RateBook.json",
-        "data/SearchCreativeWork.json",
-        "data/SearchScreeningEvent.json",
-        "data/BTC.md",
-        "data/re3d.md",
-        "data/WNUT17.md",
-        "data/Ritter.md",
-        # typo
-        "data/typo_AddToPlaylist.json",
-        "data/typo_BookRestaurant.json",
-        "data/typo_GetWeather.json",
-        "data/typo_RateBook.json",
-        "data/typo_SearchCreativeWork.json",
-        "data/typo_SearchScreeningEvent.json",
-        "data/typo_BTC.md",
-        "data/typo_re3d.md",
-        "data/typo_WNUT17.md",
-        "data/typo_Ritter.md",
+        "data/AddToPlaylist",
+        "data/BookRestaurant",
+        "data/GetWeather",
+        "data/RateBook",
+        "data/SearchCreativeWork",
+        "data/SearchScreeningEvent",
+        "data/BTC",
+        "data/re3d",
+        "data/WNUT17",
+        "data/Ritter",
     ]
 
-    for data_set in data_sets:
-        try:
-            run(data_set, pipeline=DEFAULT_PIPELINE, pipeline_name="default_pipeline")
-        except Exception as e:
-            print (e)
+    pipelines = [
+        (DEFAULT_PIPELINE, "default_pipeline"),
+        (SPACY_PIPELINE, "spacy_pipeline"),
+        (SPACY_NER_PIPELINE, "spacy_ner_pipeline"),
+    ]
 
-        try:
-            run(data_set, pipeline=SPACY_PIPELINE, pipeline_name="spacy_pipeline")
-        except Exception as e:
-            print (e)
-
-        try:
-            run(
-                data_set,
-                pipeline=SPACY_NER_PIPELINE,
-                pipeline_name="spacy_ner_pipeline",
-            )
-        except Exception as e:
-            print (e)
+    for typo in [False, True]:
+        for pipeline, pipeline_name in pipelines:
+            for data_set in data_sets:
+                try:
+                    run(
+                        data_set,
+                        pipeline=pipeline,
+                        pipeline_name=pipeline_name,
+                        typo=typo,
+                    )
+                except Exception as e:
+                    print ("#" * 100)
+                    traceback.print_exc()
+                    print ("#" * 100)

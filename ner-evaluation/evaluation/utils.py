@@ -1,18 +1,33 @@
+import json
 import os
-from typing import Text, Tuple, Optional
+from typing import Text, Tuple, Optional, Dict
 
-from nlu import load_data
-from nlu.training_data import TrainingData
+from rasa.nlu.training_data.loading import load_files
+from rasa.nlu.training_data import TrainingData
+from rasa.utils.io import list_files
 
 
 def load_training_data(
-    path: Text, keep_split: bool = False, train_frac: float = 0.8
+    path: Text, train_frac: float = 0.8, typo: bool = False
 ) -> Tuple[TrainingData, TrainingData]:
-    if keep_split and os.path.isdir(path):
-        data_train = load_data(os.path.join(path, "train.md"))
-        data_test = load_data(os.path.join(path, "test.md"))
+
+    files = list_files(path)
+
+    files = [f for f in files if (f.endswith(".md") or f.endswith(".json"))]
+    if typo:
+        files = [f for f in files if os.path.basename(f).startswith("typo_")]
     else:
-        training_data = load_data(path)
+        files = [f for f in files if not os.path.basename(f).startswith("typo_")]
+
+    train_test_split = [os.path.basename(f) == "test.md" for f in files].count(
+        True
+    ) == 1
+
+    if train_test_split:
+        data_train = load_files([f for f in files if "train" in f])
+        data_test = load_files([f for f in files if "test" in f])
+    else:
+        training_data = load_files(files)
         data_train, data_test = training_data.train_test_split(train_frac)
 
     return data_train, data_test
@@ -36,7 +51,7 @@ def create_output_files(
     if os.path.exists(configuration_file):
         os.remove(configuration_file)
 
-    return report_file, result_file, configuration_file
+    return report_folder, report_file, result_file, configuration_file
 
 
 def write_results(
@@ -50,12 +65,12 @@ def write_results(
     f.close()
 
 
-def add_to_report(report_file: Text, run: int, report: Text):
+def add_to_report(report_file: Text, run: int, report: Dict):
     f = open(report_file, "a")
     f.write("#" * 100)
     f.write("\n")
     f.write("RUN {}\n\n".format(run))
-    f.write(report)
+    f.write(json.dumps(report, indent=4))
     f.write("\n\n")
     f.close()
 
