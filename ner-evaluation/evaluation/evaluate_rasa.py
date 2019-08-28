@@ -28,14 +28,31 @@ SPACY_PIPELINE = [
     {"name": "SpacyNLP"},
     {"name": "SpacyTokenizer"},
     {"name": "SpacyFeaturizer"},
-    {"name": "CRFEntityExtractor"},
+    {
+        "name": "CRFEntityExtractor",
+        "features": [
+            ["low", "title", "upper"],
+            [
+                "bias",
+                "low",
+                "prefix5",
+                "prefix2",
+                "suffix5",
+                "suffix3",
+                "suffix2",
+                "upper",
+                "title",
+                "digit",
+                "pattern",
+                "pos",
+                "pos2",
+            ],
+            ["low", "title", "upper"],
+        ],
+    },
 ]
 
-SPACY_NER_PIPELINE = [
-    {"name": "SpacyNLP"},
-    {"name": "SpacyTokenizer"},
-    {"name": "SpacyEntityExtractor"},
-]
+SPACY_NER_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "SpacyEntityExtractor"}]
 
 
 def train_model(pipeline: List[Dict], data_train: TrainingData) -> Interpreter:
@@ -80,7 +97,7 @@ def run(
     )
 
     data_set = os.path.basename(data_path)
-    result_folder = os.path.join(output_folder, data_set)
+    result_folder = os.path.join(output_folder, pipeline_name)
     report_folder, report_file, result_file, configuration_file = create_output_files(
         data_set, result_folder, runs, train_frac, typo
     )
@@ -113,29 +130,29 @@ def run(
 
 
 if __name__ == "__main__":
-    output_folder = "dummy/"
+    output_folder = "results/rasa"
 
     data_sets = [
         "data/AddToPlaylist",
-        # "data/BookRestaurant",
-        # "data/GetWeather",
-        # "data/RateBook",
-        # "data/SearchCreativeWork",
-        # "data/SearchScreeningEvent",
-        # "data/BTC",
+        "data/BookRestaurant",
+        "data/GetWeather",
+        "data/RateBook",
+        "data/SearchCreativeWork",
+        "data/SearchScreeningEvent",
+        "data/BTC",
         # "data/re3d",
         # "data/WNUT17",
         # "data/Ritter",
     ]
 
     pipelines = [
-        (DEFAULT_PIPELINE, "default_pipeline"),
+        # (DEFAULT_PIPELINE, "default_pipeline"),
         (SPACY_PIPELINE, "spacy_pipeline"),
         # (SPACY_NER_PIPELINE, "spacy_ner_pipeline"),
     ]
 
-    for typo in [False]:
-        for train_frac in [0.8]:
+    for typo in [False, True]:
+        for train_frac in [0.5]:
             for pipeline, pipeline_name in pipelines:
                 for data_set in data_sets:
                     try:
@@ -146,6 +163,7 @@ if __name__ == "__main__":
                             typo=typo,
                             train_frac=train_frac,
                             output_folder=output_folder,
+                            runs=5,
                         )
                     except Exception as e:
                         print ("#" * 100)

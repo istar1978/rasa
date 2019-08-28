@@ -3,6 +3,8 @@ import typing
 from typing import Any, Dict, List, Text, Optional
 
 import spacy
+from spacy.util import minibatch, compounding
+
 from rasa.nlu.config import RasaNLUModelConfig
 from rasa.nlu.model import Metadata
 from rasa.nlu.training_data import TrainingData
@@ -22,7 +24,11 @@ class SpacyEntityExtractor(EntityExtractor):
         # by default all dimensions recognized by spacy are returned
         # dimensions can be configured to contain an array of strings
         # with the names of the dimensions to filter for
-        "dimensions": None
+        "dimensions": None,
+        # The maximum number of iterations for optimization algorithms.
+        "n_iter": 50,
+        # Dropout to use during training.
+        "dropout": 0.5,
     }
 
     def __init__(self, component_config: Text = None) -> None:
@@ -93,16 +99,17 @@ class SpacyEntityExtractor(EntityExtractor):
         # get names of other pipes to disable them during training
         other_pipes = [pipe for pipe in self.spacy_nlp.pipe_names if pipe != "ner"]
         with self.spacy_nlp.disable_pipes(*other_pipes):  # only train NER
-            optimizer = self.spacy_nlp.begin_training()
-            for itn in range(10):
+            self.spacy_nlp.begin_training()
+            for itn in range(self.component_config["n_iter"]):
                 random.shuffle(data)
                 losses = {}
-                for text, annotations in data:
+                batches = minibatch(data, size=compounding(4.0, 32.0, 1.001))
+                for batch in batches:
+                    texts, annotations = zip(*batch)
                     self.spacy_nlp.update(
-                        [text],  # batch of texts
-                        [annotations],  # batch of annotations
-                        drop=0.6,  # dropout - make it harder to memorise data
-                        sgd=optimizer,  # callable to update weights
+                        texts,
+                        annotations,
+                        drop=self.component_config["dropout"],
                         losses=losses,
                     )
 
