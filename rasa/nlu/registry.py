@@ -8,7 +8,6 @@ import logging
 import typing
 from typing import Any, Dict, List, Optional, Text, Type
 
-from nlu.extractors.flair_entity_extractor import FlairEntityExtractor
 from rasa.nlu.classifiers.embedding_intent_classifier import EmbeddingIntentClassifier
 from rasa.nlu.classifiers.keyword_intent_classifier import KeywordIntentClassifier
 from rasa.nlu.classifiers.mitie_intent_classifier import MitieIntentClassifier
@@ -18,6 +17,7 @@ from rasa.nlu.extractors.duckling_http_extractor import DucklingHTTPExtractor
 from rasa.nlu.extractors.entity_synonyms import EntitySynonymMapper
 from rasa.nlu.extractors.mitie_entity_extractor import MitieEntityExtractor
 from rasa.nlu.extractors.spacy_entity_extractor import SpacyEntityExtractor
+from rasa.nlu.extractors.flair_entity_extractor import FlairEntityExtractor
 from rasa.nlu.featurizers.count_vectors_featurizer import CountVectorsFeaturizer
 from rasa.nlu.featurizers.mitie_featurizer import MitieFeaturizer
 from rasa.nlu.featurizers.ngram_featurizer import NGramFeaturizer

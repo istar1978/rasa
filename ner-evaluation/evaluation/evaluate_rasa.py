@@ -136,26 +136,26 @@ if __name__ == "__main__":
 
     data_sets = [
         "data/AddToPlaylist",
-        # "data/BookRestaurant",
-        # "data/GetWeather",
-        # "data/RateBook",
-        # "data/SearchCreativeWork",
-        # "data/SearchScreeningEvent",
-        # "data/BTC",
-        # "data/re3d",
-        # "data/WNUT17",
-        # "data/Ritter",
+        "data/BookRestaurant",
+        "data/GetWeather",
+        "data/RateBook",
+        "data/SearchCreativeWork",
+        "data/SearchScreeningEvent",
+        "data/BTC",
+        "data/re3d",
+        "data/WNUT17",
+        "data/Ritter",
     ]
 
     pipelines = [
         # (DEFAULT_PIPELINE, "default_pipeline"),
         # (SPACY_PIPELINE, "spacy_pipeline"),
-        # (SPACY_NER_PIPELINE, "spacy_ner_pipeline"),
-        (FLAIR_PIPELINE, "flair_pipeline")
+        (SPACY_NER_PIPELINE, "spacy_ner_pipeline"),
+        # (FLAIR_PIPELINE, "flair_pipeline")
     ]
 
     for typo in [False]:
-        for train_frac in [0.5]:
+        for train_frac in [0.8]:
             for pipeline, pipeline_name in pipelines:
                 for data_set in data_sets:
                     try:
@@ -166,7 +166,7 @@ if __name__ == "__main__":
                             typo=typo,
                             train_frac=train_frac,
                             output_folder=output_folder,
-                            runs=1,
+                            runs=5,
                         )
                     except Exception as e:
                         print ("#" * 100)
