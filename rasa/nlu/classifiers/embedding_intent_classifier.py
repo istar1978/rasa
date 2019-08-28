@@ -84,7 +84,6 @@ class EmbeddingIntentClassifier(Component):
         "fused_lstm": False,
         "gpu_lstm": False,
         "transformer": False,
-        "use_tflite": False,  # compress transformer using TF Lite
         "pos_encoding": "timing",  # {"timing", "emb", "custom_timing"}
         # introduce phase shift in time encodings between transformers
         # 0.5 - 0.8 works on small dataset
@@ -138,6 +137,16 @@ class EmbeddingIntentClassifier(Component):
         "evaluate_every_num_epochs": 10,  # small values may hurt performance
         # how many examples to use for calculation of training accuracy
         "evaluate_on_num_examples": 1000,  # large values may hurt performance
+        ## QUANTISATION OPTIONS
+        ## pseudo (k-means quantisation like in Compressing Transformers)
+        "fake_quantise": False,  # k-means quantisation like in Compressing Transformers
+        "quantisation_rates": {  # {scope_name: num_clusters} to quantise different parts differently aggressively
+            "transformer_embed_layer_a": 256,
+            "embed_layer_a": 256,
+            "transformer_a": 2,
+        },
+        # real quantisation with TFLite
+        "tflite_quantise": False,
     }
 
     def __init__(
@@ -1469,7 +1478,7 @@ class EmbeddingIntentClassifier(Component):
     ) -> "EmbeddingIntentClassifier":
         if model_dir and meta.get("file"):
             tflite_model_file = "tflite/converted_model.tflite"
-            if meta["use_tflite"]:
+            if meta["tflite_quantise"]:
                 obj = cls.create_simpler_graph(
                     meta=meta,
                     model_dir=model_dir,
@@ -1478,16 +1487,21 @@ class EmbeddingIntentClassifier(Component):
                     model_file=tflite_model_file,
                 )
 
-                obj.interpreter = tf.lite.Interpreter(model_path=tflite_model_file)
-                obj.interpreter.allocate_tensors()
+                obj.tflite["interpreter"] = tf.lite.Interpreter(
+                    model_path=tflite_model_file
+                )
+                obj.tflite["interpreter"].allocate_tensors()
 
-                obj.a_in_index = obj.interpreter.get_input_details()[0]["index"]
-                obj.interpreter.set_tensor(
-                    obj.interpreter.get_input_details()[1]["index"],
+                obj.tflite["a_in_index"] = obj.tflite[
+                    "interpreter"
+                ].get_input_details()[0]["index"]
+                obj.tflite["interpreter"].set_tensor(
+                    obj.tflite["interpreter"].get_input_details()[1]["index"],
                     obj.all_intents_embed_values,
                 )
-
-                obj.sim_all_index = obj.interpreter.get_output_details()[0]["index"]
+                obj.sim_all_index = obj.tflite["interpreter"].get_output_details()[0][
+                    "index"
+                ]
 
                 return obj
             else:
@@ -1578,12 +1592,11 @@ class EmbeddingIntentClassifier(Component):
                         saver = tf.train.Saver()
 
                     else:
-                        print ("not a gou lstm")
                         saver = tf.train.import_meta_graph(checkpoint + ".meta")
                         # Speed on Sara test data (using extremely deep BOW model):
                         # 5s (~170it/s) using full model (6.605s invoking time)
                         # 5s (~185it/s) using converted model without any optimisation (6.308s invoking time)
-                        convert = True
+                        convert = False
                         if convert:
                             print ("converting")
                             a_in = tf.get_collection("message_placeholder")[0]
@@ -1657,7 +1670,6 @@ class EmbeddingIntentClassifier(Component):
 
                             return obj
                         else:
-                            print ("doing the vanilla loading")
                             a_in = tf.get_collection("message_placeholder")[0]
                             b_in = tf.get_collection("intent_placeholder")[0]
 
@@ -1672,34 +1684,15 @@ class EmbeddingIntentClassifier(Component):
                             intent_embed = tf.get_collection("intent_embed")[0]
                             saver.restore(sess, checkpoint)
 
-                ###################################################################
-                # fake quantisation
-                ###################################################################
-                quantise = False
-                if quantise:
-                    vars_embed_in = [
-                        v.name
-                        for v in graph.get_collection(
-                            tf.GraphKeys.TRAINABLE_VARIABLES,
-                            scope="transformer_embed_layer_a",
-                        )
-                    ]
-                    vars_embed_out = [
-                        v.name
-                        for v in graph.get_collection(
-                            tf.GraphKeys.TRAINABLE_VARIABLES, scope="embed_layer_a"
-                        )
-                    ]
-                    vars_transformer = [
-                        v.name
-                        for v in graph.get_collection(
-                            tf.GraphKeys.TRAINABLE_VARIABLES, scope="transformer_a"
-                        )
-                    ]
-                    quantise_vars(vars_embed_in, 256, graph, sess)
-                    quantise_vars(vars_embed_out, 256, graph, sess)
-                    quantise_vars(vars_transformer, 2, graph, sess)
-                ###################################################################
+                if meta["fake_quantise"]:
+                    for scope, num_clusters in meta["quantisation_rates"].items():
+                        variables = [
+                            v.name
+                            for v in graph.get_collection(
+                                tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope
+                            )
+                        ]
+                        fake_quantise_tf_variables(variables, num_clusters, graph, sess)
 
                 return cls(
                     component_config=meta,
@@ -1788,7 +1781,7 @@ class EmbeddingIntentClassifier(Component):
 
         hparams = transformer_small()
         hparams.use_pad_remover = False
-        hparams.self_attention_type = "dot_product_simplified"
+        hparams.self_attention_type = "dot_product"
 
         hparams.num_hidden_layers = len(layer_sizes)
         hparams.hidden_size = layer_sizes[0]
@@ -1843,6 +1836,8 @@ class EmbeddingIntentClassifier(Component):
             if hparams.unidirectional_encoder:
                 attn_bias_for_padding = encoder_decoder_attention_bias
 
+            print (hparams)
+
             x = transformer_encoder(
                 x,
                 self_attention_bias,
@@ -1850,6 +1845,7 @@ class EmbeddingIntentClassifier(Component):
                 # nonpadding=mask,
                 attn_bias_for_padding=attn_bias_for_padding,
             )
+            # exit(0)
 
         if meta["use_last"]:
             x = tf.reduce_sum(x * last, 1)
@@ -2000,7 +1996,6 @@ class EmbeddingIntentClassifier(Component):
             ###################################################################
             # quantisation
             # use tensorflow 1.14.0 and tensorflow-probability 0.7.0
-            # problematic ops: Cumprod, Cumsum, ScatterNd -> solved
             # problematic ops: BatchMatMul, Cos, Sign
 
             in_tensors = [a_in_weird_shape, all_intents_embed_in]
@@ -2015,9 +2010,9 @@ class EmbeddingIntentClassifier(Component):
                 # tf.lite.Optimize.OPTIMIZE_FOR_SIZE
                 # tf.lite.Optimize.OPTIMIZE_FOR_LATENCY
             ]
-
             tflite_model = converter.convert()
             open(model_file, "wb").write(tflite_model)
+
             ###################################################################
             # """
 
@@ -2040,9 +2035,9 @@ class EmbeddingIntentClassifier(Component):
             )
 
 
-def quantise_vars(vars, n_clusters, graph, sess):
+def fake_quantise_tf_variables(vars, n_clusters, graph, sess):
     with graph.as_default():
-        quantise_ops = []
+        quantisation_init_ops = []
 
         for name in vars:
             print ("Quantising '{}'...".format(name))
@@ -2054,91 +2049,84 @@ def quantise_vars(vars, n_clusters, graph, sess):
                 )
                 if v.name == name
             ][0]
-            quantise_op = quantise_var(
-                var,
-                name=name,
-                graph=graph,
-                sess=sess,
-                scope=scope,
-                n_clusters=n_clusters,
-            )
-            quantise_ops.append(quantise_op)
 
-        sess.run(quantise_ops)
+            original_shape = var.shape
+            weights_numpy = sess.run(var)
 
-
-def quantise_var(var, name, graph, sess, scope, n_clusters=256):
-    with graph.as_default():
-        orig_shape = var.shape
-        w_raw = sess.run(var)
-
-        unique_vals = get_unique_from_2d(w_raw)
-        if len(unique_vals) < n_clusters:
-            print (
-                "Number of unique values ({}) is less than the number of clusters ({}).".format(
-                    len(unique_vals), n_clusters
+            unique_vals = np.unique(weights_numpy.flatten())
+            if len(unique_vals) < n_clusters:
+                print (
+                    "Number of unique values ({}) is less than the number of clusters ({}), taking n_clusters={}.".format(
+                        len(unique_vals), n_clusters, len(unique_vals)
+                    )
                 )
+                n_clusters = len(unique_vals)
+
+            weights_indices, cluster_centres = fake_quantise_np_array(
+                weights_numpy, n_clusters, var.name.split(":")[0]
             )
-            weights, weight_table = quantise_params(
-                w_raw, len(unique_vals), var.name.split(":")[0]
+            weights_quantised_values = tf.gather(
+                params=cluster_centres,
+                indices=weights_indices,
+                name=name.split(":")[0] + "_indices_to_cluster_centres",
             )
-        else:
-            weights, weight_table = quantise_params(
-                w_raw, n_clusters, var.name.split(":")[0]
+            sess.run(tf.initialize_variables([cluster_centres, weights_indices]))
+
+            weights_quantised_values = tf.reshape(
+                weights_quantised_values, original_shape
             )
+            quantise_init_op = tf.assign(
+                var,
+                weights_quantised_values,
+                name=name.split(":")[0] + "_replace_by_quantised",
+            )
+            quantisation_init_ops.append(quantise_init_op)
 
-        weights_quantised = tf.gather(params=weight_table, indices=weights)
-        sess.run(tf.initialize_variables([weight_table, weights]))
-
-        weights_quantised = tf.reshape(weights_quantised, orig_shape)
-        quantise_op = tf.assign(
-            var, weights_quantised, name=name.split(":")[0] + "_replace_by_quantised"
-        )
-
-        return quantise_op
+        sess.run(quantisation_init_ops)
 
 
-def get_unique_from_2d(arr):
-    u = np.unique(arr.flatten())
-    return u
+def fake_quantise_np_array(arr, n_clusters, name):
+    arr_flat = arr.flatten().reshape((-1, 1))
 
-
-def quantise_params(params, n_clusters, name):
-    flat_params = params.flatten().reshape((-1, 1))
+    # initialise cluster centres
     min_weight, max_weight = (
-        np.min(flat_params).item() * 10,
-        np.max(flat_params).item() * 10,
+        np.min(arr_flat).item() * 10,
+        np.max(arr_flat).item() * 10,
     )
     spacing = (max_weight - min_weight) / (n_clusters + 1)
-    init_centroid_values = (
+    init_centre_values = (
         np.linspace(min_weight + spacing, max_weight - spacing, n_clusters) / 10
     )
-    init_centroid_values = init_centroid_values.reshape(-1, 1)
+    init_centre_values = init_centre_values.reshape(-1, 1)
 
+    # cluster values
     np.random.seed(42)
     kmeans = MiniBatchKMeans(
         n_clusters,
-        init=init_centroid_values,
+        init=init_centre_values,
         n_init=1,
         max_iter=100,
         init_size=max(300, 3 * n_clusters),
         verbose=False,
     )
-    kmeans.fit(flat_params)
+    kmeans.fit(arr_flat)
 
-    centroid_idxs = kmeans.predict(flat_params)
-    centroids = np.array([centroid[0] for centroid in kmeans.cluster_centers_])
-    centroid_table = tf.get_variable(
-        name + "-centroid_table", dtype=tf.float32, initializer=tf.constant(centroids)
+    # turn weights into pointers to cluster centres
+    arr_as_centre_indices = kmeans.predict(arr_flat)
+    centres = np.array([centre[0] for centre in kmeans.cluster_centers_])
+
+    # create TF graph elements
+    centres_tf_var = tf.get_variable(
+        name + "-centres", dtype=tf.float32, initializer=tf.constant(centres)
     )
-    quantised_pointers = tf.get_variable(
-        name + "-quantised_pointers",
+    weights_as_centre_indices = tf.get_variable(
+        name + "-pointers_to_centres",
         dtype=tf.int32,
-        initializer=tf.constant(centroid_idxs.astype(np.int32)),
+        initializer=tf.constant(arr_as_centre_indices.astype(np.int32)),
         trainable=False,
     )
 
-    return quantised_pointers, centroid_table
+    return weights_as_centre_indices, centres_tf_var
 
 
 class ChronoBiasLayerNormBasicLSTMCell(tf.contrib.rnn.LayerNormBasicLSTMCell):

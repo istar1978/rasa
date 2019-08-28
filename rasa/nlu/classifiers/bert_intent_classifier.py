@@ -58,7 +58,7 @@ class BertIntentClassifier(Component):
         "checkpoint_remove_before_training": True,
         "warm_start_checkpoint": None,
         "hat_layer_in_checkpoint": False,
-        "use_tflite": False,
+        "tflite_quantise": False,
         "sparsity_technique": None,
         "sparsity_function_exponent": 1,
         "target_sparsity": 0.5,
@@ -140,7 +140,7 @@ class BertIntentClassifier(Component):
         session: Optional["tf.Session"] = None,
         label_list: Optional[np.ndarray] = None,
         # predict_fn: Optional["Predictor"] = None,
-        use_tflite=False,
+        tflite_quantise=False,
         important_tensors=None,
     ) -> None:
         super(BertIntentClassifier, self).__init__(component_config)
@@ -170,7 +170,7 @@ class BertIntentClassifier(Component):
 
         # self.estimator = None
 
-        self.use_tflite = use_tflite
+        self.tflite_quantise = tflite_quantise
 
     def _train_tf_dataset(
         self,
@@ -490,7 +490,7 @@ class BertIntentClassifier(Component):
         # neuron pruned (58.5% avg)103s (0.105s/message), 199mb. (everything except k & q pruned *1.2 and i:.6)
 
         start = time.time()
-        if self.use_tflite:
+        if self.tflite_quantise:
             input_ids = (
                 np.array(example.input_ids)
                 .reshape(-1, self.max_seq_length)
@@ -632,10 +632,77 @@ class BertIntentClassifier(Component):
 
         writer = tf.summary.FileWriter(logdir="tfgraph-bert-loaded", graph=graph)
         writer.flush()
+
+        if meta["tflite_quantise"]:
+            tflite_model_file = "tflite/converted_model_bert.tflite"
+            # in_tensor_names = [
+            #     "input_ids",
+            #     "input_mask",
+            #     "label_ids",
+            #     "segment_ids",
+            # ]
+
+            tflite_input_tensors = [
+                input_tensors[name]
+                for name in ["input_ids", "input_mask", "segment_ids"]
+            ]
+            tflite_output_tensors = [
+                input_tensors[name] for name in ["probabilities", "predictions"]
+            ]
+            converter = tf.lite.TFLiteConverter.from_session(
+                sess, tflite_input_tensors, tflite_output_tensors
+            )
+
+            # """
+            converter.optimizations = [
+                # tf.lite.Optimize.DEFAULT  # 4s (~219it/s) (4.604s invoking time)
+                # tf.lite.Optimize.OPTIMIZE_FOR_SIZE # 4s (~220it/s) (4.707s invoking time)
+                # tf.lite.Optimize.OPTIMIZE_FOR_LATENCY # 4s (~215it/s) (4.630s invoking time)
+            ]
+            # """
+
+            """
+            # representative dataset: generator, each element is a list of input items, 
+            # items are passed to in_tensors in the order established when creating the converter
+            # https://github.com/tensorflow/tensorflow/blob/d883916ee45f3af81e81eefb7e8495d9fab6d231/tensorflow/lite/python/optimize/calibration_wrapper.cc#L110
+            with open('data/calibration_data.pickle', 'rb') as handle:
+                calibration_data = pickle.load(handle)
+            def representative_dataset_gen():
+                for d in calibration_data[:5]:
+                    yield d
+            converter.representative_dataset = tf.lite.RepresentativeDataset(representative_dataset_gen)
+            """
+
+            # https://github.com/tensorflow/tensorflow/blob/61128913681a016033143fbe9b60140d983b3c98/tensorflow/lite/tools/optimize/quantize_model.cc
+            print ("QUANTISING...")
+            tflite_model = converter.convert()
+            open(tflite_model_file, "wb").write(tflite_model)
+            # """
+
+            obj = cls(
+                component_config=meta,
+                session=sess,
+                label_list=label_list,
+                predict_fn=predict_fn,
+                use_tflite=True,
+            )
+
+            obj.interpreter = tf.lite.Interpreter(model_path=tflite_model_file)
+            obj.interpreter.allocate_tensors()
+
+            obj.in_indices = {}
+            for i, in_name in enumerate(in_tensor_names):
+                # print(in_name, obj.interpreter.get_input_details()[i]["shape"])
+                obj.in_indices[in_name] = obj.interpreter.get_input_details()[i][
+                    "index"
+                ]
+
+            obj.out_index = obj.interpreter.get_output_details()[0]["index"]
+
         return cls(
             component_config=meta,
             session=sess,
             label_list=label_list,
-            use_tflite=False,
+            tflite_quantise=False,
             important_tensors=input_tensors,
         )
