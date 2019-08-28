@@ -54,6 +54,8 @@ SPACY_PIPELINE = [
 
 SPACY_NER_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "SpacyEntityExtractor"}]
 
+FLAIR_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "FlairEntityExtractor"}]
+
 
 def train_model(pipeline: List[Dict], data_train: TrainingData) -> Interpreter:
     config = RasaNLUModelConfig(configuration_values={"pipeline": pipeline})
@@ -134,12 +136,12 @@ if __name__ == "__main__":
 
     data_sets = [
         "data/AddToPlaylist",
-        "data/BookRestaurant",
-        "data/GetWeather",
-        "data/RateBook",
-        "data/SearchCreativeWork",
-        "data/SearchScreeningEvent",
-        "data/BTC",
+        # "data/BookRestaurant",
+        # "data/GetWeather",
+        # "data/RateBook",
+        # "data/SearchCreativeWork",
+        # "data/SearchScreeningEvent",
+        # "data/BTC",
         # "data/re3d",
         # "data/WNUT17",
         # "data/Ritter",
@@ -147,11 +149,12 @@ if __name__ == "__main__":
 
     pipelines = [
         # (DEFAULT_PIPELINE, "default_pipeline"),
-        (SPACY_PIPELINE, "spacy_pipeline"),
+        # (SPACY_PIPELINE, "spacy_pipeline"),
         # (SPACY_NER_PIPELINE, "spacy_ner_pipeline"),
+        (FLAIR_PIPELINE, "flair_pipeline")
     ]
 
-    for typo in [False, True]:
+    for typo in [False]:
         for train_frac in [0.5]:
             for pipeline, pipeline_name in pipelines:
                 for data_set in data_sets:
@@ -163,7 +166,7 @@ if __name__ == "__main__":
                             typo=typo,
                             train_frac=train_frac,
                             output_folder=output_folder,
-                            runs=5,
+                            runs=1,
                         )
                     except Exception as e:
                         print ("#" * 100)

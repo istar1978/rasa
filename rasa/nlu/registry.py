@@ -8,6 +8,7 @@ import logging
 import typing
 from typing import Any, Dict, List, Optional, Text, Type
 
+from nlu.extractors.flair_entity_extractor import FlairEntityExtractor
 from rasa.nlu.classifiers.embedding_intent_classifier import EmbeddingIntentClassifier
 from rasa.nlu.classifiers.keyword_intent_classifier import KeywordIntentClassifier
 from rasa.nlu.classifiers.mitie_intent_classifier import MitieIntentClassifier
@@ -55,6 +56,7 @@ component_classes = [
     CRFEntityExtractor,
     DucklingHTTPExtractor,
     EntitySynonymMapper,
+    FlairEntityExtractor,
     # featurizers
     SpacyFeaturizer,
     MitieFeaturizer,
