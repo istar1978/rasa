@@ -3,7 +3,7 @@ import traceback
 
 from typing import Text, List, Dict
 
-from nlu.test import (
+from rasa.nlu.test import (
     get_eval_data,
     get_entity_extractors,
     evaluate_entities,
@@ -12,6 +12,7 @@ from nlu.test import (
 from rasa.nlu.model import Trainer, Interpreter
 from rasa.nlu.config import RasaNLUModelConfig
 from rasa.nlu.training_data import TrainingData
+from rasa.utils.common import set_log_level
 
 from utils import (
     create_output_files,
@@ -20,7 +21,6 @@ from utils import (
     write_results,
     write_config,
 )
-from rasa.utils.common import set_log_level
 
 DEFAULT_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "CRFEntityExtractor"}]
 
@@ -70,12 +70,17 @@ def run(
     pipeline_name: Text = "default_pipeline",
     train_frac: float = 0.8,
     typo: bool = False,
+    output_folder: Text = "results/rasa",
 ):
     set_log_level(30)
-    print ("Evaluating pipeline '{}' on dataset '{}'.".format(pipeline_name, data_path))
+    print (
+        "Evaluating pipeline '{}' on dataset '{}' (typo: {}, train_frac: {}).".format(
+            pipeline_name, data_path, typo, train_frac
+        )
+    )
 
     data_set = os.path.basename(data_path)
-    result_folder = "results/rasa/{}".format(pipeline_name)
+    result_folder = os.path.join(output_folder, data_set)
     report_folder, report_file, result_file, configuration_file = create_output_files(
         data_set, result_folder, runs, train_frac, typo
     )
@@ -108,27 +113,29 @@ def run(
 
 
 if __name__ == "__main__":
+    output_folder = "dummy/"
+
     data_sets = [
         "data/AddToPlaylist",
-        "data/BookRestaurant",
-        "data/GetWeather",
-        "data/RateBook",
-        "data/SearchCreativeWork",
-        "data/SearchScreeningEvent",
-        "data/BTC",
-        "data/re3d",
-        "data/WNUT17",
-        "data/Ritter",
+        # "data/BookRestaurant",
+        # "data/GetWeather",
+        # "data/RateBook",
+        # "data/SearchCreativeWork",
+        # "data/SearchScreeningEvent",
+        # "data/BTC",
+        # "data/re3d",
+        # "data/WNUT17",
+        # "data/Ritter",
     ]
 
     pipelines = [
         (DEFAULT_PIPELINE, "default_pipeline"),
         (SPACY_PIPELINE, "spacy_pipeline"),
-        (SPACY_NER_PIPELINE, "spacy_ner_pipeline"),
+        # (SPACY_NER_PIPELINE, "spacy_ner_pipeline"),
     ]
 
-    for typo in [False, True]:
-        for train_frac in [0.5, 0.8]:
+    for typo in [False]:
+        for train_frac in [0.8]:
             for pipeline, pipeline_name in pipelines:
                 for data_set in data_sets:
                     try:
@@ -138,6 +145,7 @@ if __name__ == "__main__":
                             pipeline_name=pipeline_name,
                             typo=typo,
                             train_frac=train_frac,
+                            output_folder=output_folder,
                         )
                     except Exception as e:
                         print ("#" * 100)

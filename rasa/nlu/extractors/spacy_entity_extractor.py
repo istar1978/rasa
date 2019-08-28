@@ -3,9 +3,9 @@ import typing
 from typing import Any, Dict, List, Text, Optional
 
 import spacy
-from nlu.config import RasaNLUModelConfig
-from nlu.model import Metadata
-from nlu.training_data import TrainingData
+from rasa.nlu.config import RasaNLUModelConfig
+from rasa.nlu.model import Metadata
+from rasa.nlu.training_data import TrainingData
 from rasa.nlu.extractors import EntityExtractor
 from rasa.nlu.training_data import Message
 
