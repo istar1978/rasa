@@ -162,7 +162,9 @@ class BertModel(object):
         embeddings or tf.embedding_lookup() for the word embeddings. On the TPU,
         it is much faster if this is True, on the CPU or GPU, it is faster if
         this is False.
-      scope: (optional) variable scope. Defaults to "bert".
+      scope: (optional) variable scope. Defaults to "bert"
+      sparsity_technique: (optional) one of [None, 'weight_pruning', 'neuron_pruning'],
+      trained_np_masks: (optional) the trained masks in neuron pruning, used for inflating activation dimensionality.
 
     Raises:
       ValueError: The config is invalid or one of the input tensor shapes
@@ -222,8 +224,6 @@ class BertModel(object):
                 )
 
                 # Run the stacked transformer.
-                # `sequence_output` shape = [batch_size, seq_length, hidden_size].
-                # self.all_encoder_layers = transformer_model(
                 self.sequence_output = transformer_model(
                     input_tensor=self.embedding_output,
                     attention_mask=attention_mask,
@@ -239,8 +239,6 @@ class BertModel(object):
                     sparsity_technique=self.sparsity_technique,
                     trained_np_masks=self.trained_np_masks,
                 )
-
-            # self.sequence_output = self.all_encoder_layers[-1]
 
             # The "pooler" converts the encoded sequence tensor of shape
             # [batch_size, seq_length, hidden_size] to a tensor of shape
@@ -950,11 +948,6 @@ def transformer_model(
                     trained_np_masks=trained_np_masks,
                     inflate_back_after_pruning=False,
                 )
-                print (
-                    "Size of output from intermediate: {}".format(
-                        intermediate_output.shape.as_list()
-                    )
-                )
 
             # Down-project back to `hidden_size` then add the residual.
             with tf.variable_scope("output"):
@@ -983,10 +976,10 @@ def transformer_model(
         return final_output
 
 
-# replacement for tf.layers.dense which supports pruning
+# replacement for tf.layers.dense which supports weight and neuron pruning
 # NOTE: if weight or neuron pruning is used, what is 'kernel' and 'bias' in the graph
 # of tf.layers.dense, becomes 'weights' and 'biases' in the graph of dense_pruned.
-# This originates from tf.contrib.model_pruning.masked_fully_connected
+# This originates from tf.contrib.model_pruning.masked_fully_connected()
 def dense_pruned(
     x,
     units,
@@ -994,7 +987,7 @@ def dense_pruned(
     use_bias=True,
     kernel_initializer=None,
     bias_initializer=None,
-    sparsity_technique="weight_pruning",
+    sparsity_technique=None,
     dtype=tf.float32,
     name="dense",
     initial_sparsity=None,
@@ -1016,10 +1009,15 @@ def dense_pruned(
     dtype: data type for the weights and computation.
     name: name for the layer.
     initial_sparsity: initial weight sparsity at the start of training.
+    inflate_back_after_pruning: whether to inflate activations' dimensionality in neuron pruning.
+    trained_np_masks: trained masks to use in neuron pruning to inflate activations' dimensionality 
+                      (if inflate_back_after_pruning=True, then no inflation happens -- this is 
+                      the cross-pruning use case)
 
   Returns:
     Tensor representing the output of the layer.
   """
+    # Use tf.layers.dense if no pruning is to be done
     if sparsity_technique is None:
         return tf.layers.dense(
             x,
@@ -1030,11 +1028,12 @@ def dense_pruned(
             bias_initializer=bias_initializer,
             name=name,
         )
+
+    # Resize the activations' dimensionality based on a trained neuron-pruning mask
     elif sparsity_technique == "neuron_pruning" and trained_np_masks is not None:
-        print (
-            "############################\ncreating resized dense layer\n###################################"
-        )
-        with tf.variable_scope(name, reuse=tf.compat.v1.AUTO_REUSE):
+        with tf.variable_scope(
+            name, reuse=tf.compat.v1.AUTO_REUSE, auxiliary_name_scope=False
+        ):
             scope = tf.get_variable_scope().name
         if scope not in trained_np_masks:
             raise KeyError("Neuron pruning mask for scope {} not found!".format(scope))
@@ -1052,39 +1051,40 @@ def dense_pruned(
             reuse=tf.AUTO_REUSE,
         )
 
+        # If not doing cross-pruning, inflate the activations to the original dimensionality.
         if inflate_back_after_pruning:
             if len(layer.shape.as_list()) != 2:
                 raise ValueError("Shape of the pruned dense layer output must be 2D!")
-
-            with tf.variable_scope(name, reuse=tf.compat.v1.AUTO_REUSE):
-                output_shape_full = tf.concat(
-                    [tf.shape(layer)[:-1], [output_dim]], axis=0
-                )
-                scatter_indices = np.nonzero(trained_mask)[0]
-                scatter_indices.sort()
-                scatter_indices = [[i] for i in scatter_indices]
-                scatter_indices_tf = tf.constant(
-                    scatter_indices, name="scatter_indices"
-                )
-                layer = tf.transpose(
-                    tf.scatter_nd(
-                        scatter_indices_tf,
-                        tf.transpose(layer),
-                        shape=tf.reverse(output_shape_full, axis=[0]),
-                        name="inflate_pruned_outputs",
-                    )
-                )
-        else:
-            print (
-                "Keeping layer outputs sparsified (not inflating them back to {} depth).".format(
-                    units
-                )
-            )
-
-        print (layer.shape.as_list())
+            with tf.variable_scope(
+                name, reuse=tf.compat.v1.AUTO_REUSE, auxiliary_name_scope=False
+            ) as var_scope:
+                with tf.name_scope(var_scope.name + "/"):
+                    # This is black magic. If you want to understand, try to run this small snippet on
+                    # its own, using some small arrays of numbers.
+                    with tf.variable_scope(
+                        "inflate_to_original_size", reuse=tf.compat.v1.AUTO_REUSE
+                    ):
+                        output_shape_full = tf.concat(
+                            [tf.shape(layer)[:-1], [output_dim]], axis=0
+                        )
+                        scatter_indices = np.nonzero(trained_mask)[0]
+                        scatter_indices.sort()
+                        scatter_indices = [[i] for i in scatter_indices]
+                        scatter_indices_tf = tf.constant(
+                            scatter_indices, name="scatter_indices"
+                        )
+                        layer = tf.transpose(
+                            tf.scatter_nd(
+                                scatter_indices_tf,
+                                tf.transpose(layer),
+                                shape=tf.reverse(output_shape_full, axis=[0]),
+                                name="inflate_pruned_outputs",
+                            )
+                        )
 
         return layer
 
+    # Set up pruning
     elif sparsity_technique in ["weight_pruning", "neuron_pruning"]:
         if kernel_initializer is None:
             kernel_initializer = create_initializer()
@@ -1093,6 +1093,7 @@ def dense_pruned(
         if bias_initializer is None:
             bias_initializer = initializers.get("zeros")
 
+        # simply use layers.masked_fully_connected() from tf.contrib.model_pruning.python.layers
         if sparsity_technique == "weight_pruning":
             if initial_sparsity is not None:
                 # If the initial sparsity value is passed in, use the sparse glorot
@@ -1120,6 +1121,9 @@ def dense_pruned(
                 biases_initializer=bias_initializer,
                 scope=name,
             )
+
+        # this is more complicated than weight pruning because we're also setting up
+        # the accumulators for neuron rankings
         elif sparsity_technique == "neuron_pruning":
             bias_initializer = bias_initializer if use_bias else None
             layer = pruning_layers.masked_fully_connected(
@@ -1131,39 +1135,40 @@ def dense_pruned(
                 scope=name,
                 reuse=tf.compat.v1.AUTO_REUSE,
             )
-            # use the same scope as the one in which the weight matrix is created when calling
-            # pruning_layers.masked_fully_connected()
-            with tf.variable_scope(name, reuse=tf.compat.v1.AUTO_REUSE):
-                neuron_rank_accumulator = tf.get_variable(
-                    initializer=tf.zeros_initializer,
-                    shape=[units],
-                    trainable=False,
-                    name="neuron_rank_accumulator",
-                )
-                tf.get_default_graph().add_to_collection(
-                    "neuron_rank_accumulators", neuron_rank_accumulator
-                )
-                zeros = tf.zeros(shape=[units])
-                accumulator_reset_op = tf.assign(
-                    neuron_rank_accumulator, zeros, name="reset_neuron_rank_accumulator"
-                )
-                tf.get_default_graph().add_to_collection(
-                    "accumulators_reset", accumulator_reset_op
-                )
 
-                """
-                Output of this dense is: inputs * weights, e.g. (128x768) * (768*768).
-                Hence, the >>>columns<<< of the matrix correspond to the neurons, and >>>columns<<<
-                of the activation correspond to neurons' outputs. Hence, we wanna sum all rows 
-                (along axis 0) to get neuron-level scores.
-                """
-                scope = tf.get_variable_scope().name
-                matmul = tf.get_default_graph().get_tensor_by_name(
-                    "{}/BiasAdd:0".format(scope)
-                )
-                tf.get_default_graph().add_to_collection(
-                    "pruning_activation_providers", matmul
-                )
+            with tf.variable_scope(
+                name, reuse=tf.compat.v1.AUTO_REUSE, auxiliary_name_scope=False
+            ) as var_scope:
+                with tf.name_scope(var_scope.name + "/"):
+                    neuron_rank_accumulator = tf.get_variable(
+                        initializer=tf.zeros_initializer,
+                        shape=[units],
+                        trainable=False,
+                        name="neuron_rank_accumulator",
+                    )
+                    tf.get_default_graph().add_to_collection(
+                        "neuron_rank_accumulators", neuron_rank_accumulator
+                    )
+                    zeros = tf.zeros(shape=[units])
+
+                    # the reset op will be called after each pruning step
+                    accumulator_reset_op = tf.assign(
+                        neuron_rank_accumulator,
+                        zeros,
+                        name="reset_neuron_rank_accumulator",
+                    )
+                    tf.get_default_graph().add_to_collection(
+                        "accumulators_reset", accumulator_reset_op
+                    )
+
+                    scope = tf.get_variable_scope().name
+                    # this will provide neuron activations for neuron ranking
+                    matmul = tf.get_default_graph().get_tensor_by_name(
+                        "{}/BiasAdd:0".format(scope)
+                    )
+                    tf.get_default_graph().add_to_collection(
+                        "pruning_activation_providers", matmul
+                    )
 
             return layer
 

@@ -182,11 +182,6 @@ def convert_single_example(ex_index, example, label_list, max_seq_length, tokeni
     return feature
 
 
-#
-#
-#
-
-
 def get_train_examples(training_examples):
     """See base class."""
     return create_examples(training_examples, "train")
@@ -225,27 +220,6 @@ def create_examples(rasa_training_examples, set_type):
     return examples
 
 
-#
-#
-#
-
-
-def check_global_sparsity():
-    """Add a summary for the weight sparsity."""
-    weight_masks = magnitude_pruning.get_masks()
-    weights_per_layer = []
-    nonzero_per_layer = []
-    for mask in weight_masks:
-        nonzero_per_layer.append(tf.reduce_sum(mask))
-        weights_per_layer.append(tf.size(mask))
-        total_nonzero = tf.add_n(nonzero_per_layer)
-        total_weights = tf.add_n(weights_per_layer)
-    sparsity = 1.0 - (
-        tf.cast(total_nonzero, tf.float32) / tf.cast(total_weights, tf.float32)
-    )
-    tf.summary.scalar("global_weight_sparsity", sparsity)
-
-
 def build_sparsity_map(
     graph,
     keys=0.5,
@@ -259,7 +233,6 @@ def build_sparsity_map(
     weights = graph.get_collection(core.WEIGHT_COLLECTION)
     sparsity_map = {}
     for w in weights:
-        # print(w.name)
         if "/key/weights" in w.name:
             sparsity = keys
         elif "/query/weights" in w.name:
@@ -295,7 +268,6 @@ def load_pruning_masks_from_ckpt(ckpt_name):
         nonzero = np.count_nonzero(mask_squashed)
         sparsity = 1 - (nonzero / len(mask_squashed))
         mask_dict[scope] = mask_squashed
-        # print ("{}: {:.1f}% sparsity".format(scope, 100 * sparsity))
 
     return mask_dict
 
@@ -323,17 +295,8 @@ def pruning_hparams(hparams):  # pylint: disable=unused-argument
 
     return hparams
 
-    # def model_fn_builder(
-    #     bert_tfhub_module_handle,
-    #     num_labels,
-    #     learning_rate,
-    #     num_train_steps,
-    #     num_warmup_steps,
-    #     bert_config,
-    # ):
-    """Returns `model_fn` closure for TPUEstimator."""
 
-
+# The main function for building a BERT model
 def build_model(
     features,
     mode,
@@ -345,16 +308,10 @@ def build_model(
     num_warmup_steps,
     bert_config,
 ):  # pylint: disable=unused-argument
-    print ("####################\nMODE=<{}>\n##########################".format(mode))
-    # print(tf.estimator.ModeKeys.PREDICT)
-    """The `model_fn` for TPUEstimator."""
     input_ids = tf.identity(features["input_ids"], name="input_ids")
     input_mask = tf.identity(features["input_mask"], name="input_mask")
     segment_ids = tf.identity(features["segment_ids"], name="segment_ids")
     label_ids = tf.identity(features["label_ids"], name="label_ids")
-
-    # print(input_ids, input_mask, segment_ids, label_ids)
-    # exit(0)
 
     input_tensors = {
         "input_ids": input_ids,
@@ -363,21 +320,13 @@ def build_model(
         "label_ids": label_ids,
     }
 
-    is_predicting = mode == "predict"
-    if not is_predicting:
-        masks_dict = None
-        if (
-            params["sparsity_technique"] == "neuron_pruning"
-            and params["sparsification_params"]["resize_pruned_matrices"]
-        ):
-            # get a var: mask dict from checkpoint
-            masks_ckpt = params["sparsification_params"]["checkpoint_for_pruning_masks"]
-            if masks_ckpt is None:
-                raise ValueError(
-                    "You are trying to resize pruned weight matrices but haven't provided a checkpoint to take the masks from!"
-                )
-            masks_dict = load_pruning_masks_from_ckpt(ckpt_name=masks_ckpt)
+    if mode not in ["train", "predict"]:
+        raise ValueError("'mode' must be either 'train' or 'predict'")
 
+    is_predicting = mode == "predict"
+
+    # Creating training graph
+    if not is_predicting:
         g = tf.get_default_graph()
         (loss, predicted_labels, log_probs) = create_model(
             is_predicting,
@@ -389,47 +338,73 @@ def build_model(
             bert_tfhub_module_handle,
             bert_config,
             sparsity_technique=params["sparsity_technique"],
-            trained_masks=masks_dict,
+            trained_masks=None,
         )
         with g.as_default():
-            with tf.variable_scope("loss", reuse=tf.AUTO_REUSE):
-                accuracy = tf.metrics.accuracy(
-                    labels=label_ids, predictions=predicted_labels, name="accuracy"
+            with tf.variable_scope("loss", auxiliary_name_scope=False):
+                with tf.name_scope("loss/"):
+                    accuracy = tf.metrics.accuracy(
+                        labels=label_ids, predictions=predicted_labels, name="accuracy"
+                    )
+
+        if params["sparsity_technique"] == "weight_pruning":
+            train_op = create_optimizer(
+                loss,
+                learning_rate,
+                num_train_steps,
+                num_warmup_steps,
+                use_tpu=False,
+                vars_to_optimize=(
+                    None
+                    if not params["finetune_hat_only"]
+                    else ["output_weights", "output_bias"]
+                ),
+            )
+            with tf.control_dependencies([train_op]):
+                mp_hparams = pruning_hparams(params["sparsification_params"])
+                p = magnitude_pruning.Pruning(
+                    mp_hparams, global_step=tf.train.get_global_step()
                 )
-        # [print(v.name) for v in g.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
-        # exit(0)
-        """
-        logging_hook = tf.train.LoggingTensorHook(
-            {"loss": loss, "accuracy": accuracy[1]}, every_n_iter=1
-        )
+                mask_update_op = p.conditional_mask_update_op()
+                train_op = mask_update_op
 
-        # Calculate evaluation metrics.
-        def metric_fn(label_ids, predicted_labels):
-            accuracy = tf.metrics.accuracy(label_ids, predicted_labels)
-            f1_score = tf.contrib.metrics.f1_score(label_ids, predicted_labels)
-            auc = tf.metrics.auc(label_ids, predicted_labels)
-            recall = tf.metrics.recall(label_ids, predicted_labels)
-            precision = tf.metrics.precision(label_ids, predicted_labels)
-            true_pos = tf.metrics.true_positives(label_ids, predicted_labels)
-            true_neg = tf.metrics.true_negatives(label_ids, predicted_labels)
-            false_pos = tf.metrics.false_positives(label_ids, predicted_labels)
-            false_neg = tf.metrics.false_negatives(label_ids, predicted_labels)
-            return {
-                "eval_accuracy": accuracy,
-                "f1_score": f1_score,
-                "auc": auc,
-                "precision": precision,
-                "recall": recall,
-                "true_positives": true_pos,
-                "true_negatives": true_neg,
-                "false_positives": false_pos,
-                "false_negatives": false_neg,
-            }
+        elif params["sparsity_technique"] == "neuron_pruning":
+            pruning_activations = g.get_collection("pruning_activation_providers")
+            # Set up accumulating gradients, activations, and the resulting neuron rankings for neuron pruning
+            with tf.name_scope("neuron_pruning_training"):
+                grads = tf.gradients(
+                    loss, pruning_activations, name="gradients_for_pruning"
+                )
 
-        eval_metrics = metric_fn(label_ids, predicted_labels)
-        """
-        if mode == "train":
-            if params["sparsity_technique"] == "weight_pruning":
+                for gradient, activation in zip(grads, pruning_activations):
+                    scope = "/".join(activation.name.split("/")[:-1])
+                    neuron_rank_accumulator_name = scope + "/neuron_rank_accumulator:0"
+                    neuron_rank_accumulator = [
+                        v
+                        for v in g.get_collection("neuron_rank_accumulators")
+                        if v.name == neuron_rank_accumulator_name
+                    ][0]
+
+                    with tf.name_scope(scope + "/rank"):
+                        local_rank = tf.multiply(gradient, activation)
+                        local_rank = tf.math.reduce_mean(local_rank, axis=0)
+                        neuron_rank_accumulator_update_op = tf.assign_add(
+                            neuron_rank_accumulator,
+                            local_rank,
+                            name="neuron_rank_accumulator_update",
+                        )
+                        g.add_to_collection(
+                            "neuron_rank_accumulators_update",
+                            neuron_rank_accumulator_update_op,
+                        )
+
+                # These ops will update the accumulators after each minibatch
+                update_accumulators_op = tf.group(
+                    g.get_collection("neuron_rank_accumulators_update"),
+                    name="all_accumulators_update_op",
+                )
+
+                # The optimiser, same as without doing pruning
                 train_op = create_optimizer(
                     loss,
                     learning_rate,
@@ -442,218 +417,62 @@ def build_model(
                         else ["output_weights", "output_bias"]
                     ),
                 )
-                if not "load_masks_from" in params:
-                    # If we are loading trained masks, don't add the mask update
-                    # step to the training process and keep the masks static
-                    with tf.control_dependencies([train_op]):
+
+                # perhaps prune each BERT component to an exact sparsity level,
+                # rather than pruning the model to some overall sparsity
+                if (
+                    params["sparsification_params"]["component_target_sparsities"]
+                    is not None
+                ):
+                    component_sparsities = params["sparsification_params"][
+                        "component_target_sparsities"
+                    ]
+                    sparsity_map = build_sparsity_map(
+                        g,
+                        keys=component_sparsities["k"],
+                        queries=component_sparsities["q"],
+                        values=component_sparsities["v"],
+                        att_outputs=component_sparsities["ao"],
+                        intermediates=component_sparsities["i"],
+                        outputs=component_sparsities["o"],
+                        pooler=component_sparsities["p"],
+                    )
+                else:
+                    sparsity_map = None
+
+                # Changing the control flow to ensure that a call to the pruning module
+                # is made after each minibatch.
+                with tf.control_dependencies([train_op]):
+                    with tf.control_dependencies([update_accumulators_op]):
                         mp_hparams = pruning_hparams(params["sparsification_params"])
-                        p = magnitude_pruning.Pruning(
-                            mp_hparams, global_step=tf.train.get_global_step()
+                        pruning = neuron_pruning.Pruning(
+                            mp_hparams,
+                            global_step=tf.train.get_global_step(),
+                            neuron_rank_accumulators_reset="accumulators_reset",
+                            sparsity_map=sparsity_map,
                         )
-                        mask_update_op = p.conditional_mask_update_op()
+                        mask_update_op = pruning.conditional_mask_update_op()
                         train_op = mask_update_op
-                check_global_sparsity()
 
-            elif params["sparsity_technique"] == "neuron_pruning":
-                # prepare gradient and activation accumulators
-                # accumulate activations and grads by summing, this basically requires two ops to be added to train_op
-                # step through all relevant vars
-                # multiply activations by gradients, sum as required to get neuron scores
-                # select K smallest neurons
-                # update the weight matrix by setting stuff to 0
-
-                """
-                def train_formatter(stats):
-                    s = "accuracy = {:.4f}, loss = {:.5f}, sparsity = {:.3f}, train_step = {}".format(
-                        stats["accuracy"],
-                        stats["loss"],
-                        stats["sparsity"],
-                        stats["train_step"],
-                    )
-                    return s
-                """
-
-                if not params["sparsification_params"][
-                    "resize_pruned_matrices"
-                ]:  # doing pruning mask updates and setting up all tha fancy shit around that
-                    pruning_activations = g.get_collection(
-                        "pruning_activation_providers"
-                    )
-                    with tf.name_scope("neuron_pruning_training"):
-                        grads = tf.gradients(
-                            loss, pruning_activations, name="gradients_for_pruning"
-                        )
-
-                        for gradient, activation in zip(grads, pruning_activations):
-                            scope = "/".join(activation.name.split("/")[:-1])
-                            neuron_rank_accumulator_name = (
-                                scope + "/neuron_rank_accumulator:0"
-                            )
-                            neuron_rank_accumulator = [
-                                v
-                                for v in g.get_collection("neuron_rank_accumulators")
-                                if v.name == neuron_rank_accumulator_name
-                            ][0]
-
-                            with tf.name_scope(scope + "/rank"):
-                                local_rank = tf.multiply(gradient, activation)
-                                local_rank = tf.math.reduce_mean(local_rank, axis=0)
-                                neuron_rank_accumulator_update_op = tf.assign_add(
-                                    neuron_rank_accumulator,
-                                    local_rank,
-                                    name="neuron_rank_accumulator_update",
-                                )
-                                g.add_to_collection(
-                                    "neuron_rank_accumulators_update",
-                                    neuron_rank_accumulator_update_op,
-                                )
-
-                        update_accumulators_op = tf.group(
-                            g.get_collection("neuron_rank_accumulators_update"),
-                            name="all_accumulators_update_op",
-                        )
-
-                        train_op = create_optimizer(
-                            loss,
-                            learning_rate,
-                            num_train_steps,
-                            num_warmup_steps,
-                            use_tpu=False,
-                            vars_to_optimize=(
-                                None
-                                if not params["finetune_hat_only"]
-                                else ["output_weights", "output_bias"]
-                            ),
-                        )
-
-                        # sparsity_map = build_sparsity_map(g)
-                        # sparsity_map = build_sparsity_map(
-                        #     g,
-                        #     keys=0.9,
-                        #     queries=0.9,
-                        #     values=0.45,
-                        #     att_outputs=0.25,
-                        #     intermediates=0.45,
-                        #     outputs=0.2,
-                        #     pooler=0.3,
-                        # )
-                        sparsity_map = build_sparsity_map(
-                            g,
-                            keys=0.9999,
-                            queries=0.9999,
-                            values=0.9999,
-                            att_outputs=0.9999,
-                            intermediates=0.0,
-                            outputs=0.0,
-                            pooler=0.0,
-                        )
-                        sparsity_map = None
-                        print (sparsity_map)
-                        # c = 1.2
-                        # sparsity_map = build_sparsity_map(
-                        #     g,
-                        #     keys=0.9,
-                        #     queries=0.9,
-                        #     values=0.45 * c,
-                        #     att_outputs=0.25 * c,
-                        #     intermediates=0.6,
-                        #     outputs=0.2 * c,
-                        #     pooler=0.3 * c,
-                        # )
-
-                        # sparsity_map = build_sparsity_map(
-                        #     g,
-                        #     keys=almost_zero,
-                        #     queries=almost_zero,
-                        #     values=almost_zero,
-                        #     att_outputs=almost_zero,
-                        #     intermediates=almost_zero,
-                        #     outputs=almost_zero,
-                        #     pooler=almost_zero,
-                        # )
-                        # print (sparsity_map)
-                        # exit(0)
-
-                        with tf.control_dependencies([train_op]):
-                            with tf.control_dependencies([update_accumulators_op]):
-                                mp_hparams = pruning_hparams(
-                                    params["sparsification_params"]
-                                )
-                                pruning = neuron_pruning.Pruning(
-                                    mp_hparams,
-                                    global_step=tf.train.get_global_step(),
-                                    neuron_rank_accumulators_reset="accumulators_reset",
-                                    sparsity_map=sparsity_map,
-                                )
-                                mask_update_op = pruning.conditional_mask_update_op()
-                                train_op = mask_update_op
-                    """
-                    logging_hook = tf.train.LoggingTensorHook(
-                        {
-                            "loss": loss,
-                            "accuracy": accuracy[1],
-                            "train_step": tf.train.get_global_step(),
-                            "sparsity": pruning._get_sparsity(),
-                        },
-                        every_n_iter=1,
-                        formatter=train_formatter,
-                    )
-                    """
-                else:  # not doing pruning mask updates
-                    print ("Resizing the weight matrices!")
-                    train_op = create_optimizer(
-                        loss,
-                        learning_rate,
-                        num_train_steps,
-                        num_warmup_steps,
-                        use_tpu=False,
-                        vars_to_optimize=(
-                            None
-                            if not params["finetune_hat_only"]
-                            else ["output_weights", "output_bias"]
-                        ),
-                    )
-                    """
-                    logging_hook = tf.train.LoggingTensorHook(
-                        {
-                            "loss": loss,
-                            "accuracy": accuracy[1],
-                            "train_step": tf.train.get_global_step(),
-                            "sparsity": params["sparsification_params"]["target_sparsity"]
-                        },
-                        every_n_iter=1,
-                        formatter=train_formatter,
-                    )
-                    """
-                """
-                writer = tf.summary.FileWriter(
-                    logdir="tfgraph-bert-raw-train-np", graph=g
-                )
-                writer.flush()
-                # exit(0)
-                """
-
-            else:
-                train_op = create_optimizer(
-                    loss,
-                    learning_rate,
-                    num_train_steps,
-                    num_warmup_steps,
-                    use_tpu=False,
-                    vars_to_optimize=(
-                        None
-                        if not params["finetune_hat_only"]
-                        else ["output_weights", "output_bias"]
-                    ),
-                )
-
-            return train_op, loss, input_tensors, log_probs, predicted_labels, accuracy
         else:
-            raise ValueError("'mode' must be either 'train' or 'predict'")
+            train_op = create_optimizer(
+                loss,
+                learning_rate,
+                num_train_steps,
+                num_warmup_steps,
+                use_tpu=False,
+                vars_to_optimize=(
+                    None
+                    if not params["finetune_hat_only"]
+                    else ["output_weights", "output_bias"]
+                ),
+            )
+
+        return train_op, loss, input_tensors, log_probs, predicted_labels, accuracy
+
+    # Creating inference graph, don't create the optimizer or pruning mask updates.
+    # If neuron pruning is used, also handle the resized weights ()
     else:
-        # print ("DOING INFERENCE MODEL PREPARATION")
-        # print (params)
-        # print (input_ids.shape)
         if params["sparsity_technique"] != "neuron_pruning":
             (predicted_labels, log_probs) = create_model(
                 is_predicting,
@@ -667,16 +486,12 @@ def build_model(
                 sparsity_technique=params["sparsity_technique"],
             )
         elif params["sparsity_technique"] == "neuron_pruning":
-            masks_dict = None
-            if params["sparsification_params"]["resize_pruned_matrices"]:
-                masks_ckpt = params["sparsification_params"][
-                    "checkpoint_for_pruning_masks"
-                ]
-                if masks_ckpt is None:
-                    raise ValueError(
-                        "You are trying to resize pruned weight matrices but haven't provided a checkpoint to take the masks from!"
-                    )
-                masks_dict = load_pruning_masks_from_ckpt(ckpt_name=masks_ckpt)
+            masks_ckpt = params["sparsification_params"]["checkpoint_for_pruning_masks"]
+            if masks_ckpt is None:
+                raise ValueError(
+                    "You are trying to resize neuron-pruned weight matrices but haven't provided a checkpoint to take the masks from!"
+                )
+            masks_dict = load_pruning_masks_from_ckpt(ckpt_name=masks_ckpt)
 
             (predicted_labels, log_probs) = create_model(
                 is_predicting,
@@ -690,8 +505,6 @@ def build_model(
                 sparsity_technique=params["sparsity_technique"],
                 trained_masks=masks_dict,
             )
-        else:
-            raise ValueError("WTF??")
 
         return predicted_labels, log_probs, input_tensors
 
@@ -755,7 +568,6 @@ def create_model(
 
     with tf.variable_scope("loss", reuse=tf.AUTO_REUSE):
         if not is_predicting:
-            # I.e., 0.1 dropout
             output_layer = tf.nn.dropout(output_layer, keep_prob=0.9)
 
         logits = tf.matmul(output_layer, output_weights, transpose_b=True)
@@ -786,11 +598,6 @@ def create_tokenizer_from_hub_module(bert_tfhub_module_handle):
                 [tokenization_info["vocab_file"], tokenization_info["do_lower_case"]]
             )
     return FullTokenizer(vocab_file=vocab_file, do_lower_case=do_lower_case)
-
-
-#
-#
-#
 
 
 def serving_input_fn_builder(max_seq_length, is_predicting=False):
@@ -843,11 +650,6 @@ def serving_input_fn_builder(max_seq_length, is_predicting=False):
             return input_fn
 
     return serving_input_fn
-
-
-#
-#
-#
 
 
 def _truncate_seq_pair(tokens_a, tokens_b, max_length):
@@ -917,8 +719,6 @@ def build_input_dataset(features, seq_length, is_training, drop_remainder, param
     # return input_fn
 
 
-# This function is not used by this file but is still used by the Colab and
-# people who depend on it.
 def input_fn_builder(features, seq_length, is_training, drop_remainder):
     """Creates an `input_fn` closure to be passed to TPUEstimator."""
 

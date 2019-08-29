@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Text, Tuple
 import time
 
 import numpy as np
-from sklearn.cluster import MiniBatchKMeans
 from scipy.sparse import issparse, csr_matrix
 from tensor2tensor.models.transformer import (
     transformer_small,
@@ -22,6 +21,7 @@ from tensor2tensor.layers.common_attention import (
 )
 
 from rasa.nlu.classifiers import INTENT_RANKING_LENGTH
+from rasa.nlu.classifiers.compression_utils import fake_quantise_tf_variables
 from rasa.nlu.components import Component
 from rasa.utils.common import is_logging_disabled
 
@@ -2033,100 +2033,6 @@ class EmbeddingIntentClassifier(Component):
                 is_tflite=True,
                 tflite_path=model_file,
             )
-
-
-def fake_quantise_tf_variables(vars, n_clusters, graph, sess):
-    with graph.as_default():
-        quantisation_init_ops = []
-
-        for name in vars:
-            print ("Quantising '{}'...".format(name))
-            scope = "/".join(name.split("/")[:-1])
-            var = [
-                v
-                for v in graph.get_collection(
-                    tf.GraphKeys.GLOBAL_VARIABLES, scope=scope
-                )
-                if v.name == name
-            ][0]
-
-            original_shape = var.shape
-            weights_numpy = sess.run(var)
-
-            unique_vals = np.unique(weights_numpy.flatten())
-            if len(unique_vals) < n_clusters:
-                print (
-                    "Number of unique values ({}) is less than the number of clusters ({}), taking n_clusters={}.".format(
-                        len(unique_vals), n_clusters, len(unique_vals)
-                    )
-                )
-                n_clusters = len(unique_vals)
-
-            weights_indices, cluster_centres = fake_quantise_np_array(
-                weights_numpy, n_clusters, var.name.split(":")[0]
-            )
-            weights_quantised_values = tf.gather(
-                params=cluster_centres,
-                indices=weights_indices,
-                name=name.split(":")[0] + "_indices_to_cluster_centres",
-            )
-            sess.run(tf.initialize_variables([cluster_centres, weights_indices]))
-
-            weights_quantised_values = tf.reshape(
-                weights_quantised_values, original_shape
-            )
-            quantise_init_op = tf.assign(
-                var,
-                weights_quantised_values,
-                name=name.split(":")[0] + "_replace_by_quantised",
-            )
-            quantisation_init_ops.append(quantise_init_op)
-
-        sess.run(quantisation_init_ops)
-
-
-def fake_quantise_np_array(arr, n_clusters, name):
-    arr_flat = arr.flatten().reshape((-1, 1))
-
-    # initialise cluster centres
-    min_weight, max_weight = (
-        np.min(arr_flat).item() * 10,
-        np.max(arr_flat).item() * 10,
-    )
-    spacing = (max_weight - min_weight) / (n_clusters + 1)
-    init_centre_values = (
-        np.linspace(min_weight + spacing, max_weight - spacing, n_clusters) / 10
-    )
-    init_centre_values = init_centre_values.reshape(-1, 1)
-
-    # cluster values
-    np.random.seed(42)
-    kmeans = MiniBatchKMeans(
-        n_clusters,
-        init=init_centre_values,
-        n_init=1,
-        max_iter=100,
-        init_size=max(300, 3 * n_clusters),
-        verbose=False,
-    )
-    kmeans.fit(arr_flat)
-
-    # turn weights into pointers to cluster centres
-    arr_as_centre_indices = kmeans.predict(arr_flat)
-    centres = np.array([centre[0] for centre in kmeans.cluster_centers_])
-
-    # create TF graph elements
-    centres_tf_var = tf.get_variable(
-        name + "-centres", dtype=tf.float32, initializer=tf.constant(centres)
-    )
-    weights_as_centre_indices = tf.get_variable(
-        name + "-pointers_to_centres",
-        dtype=tf.int32,
-        initializer=tf.constant(arr_as_centre_indices.astype(np.int32)),
-        trainable=False,
-    )
-
-    return weights_as_centre_indices, centres_tf_var
 
 
 class ChronoBiasLayerNormBasicLSTMCell(tf.contrib.rnn.LayerNormBasicLSTMCell):

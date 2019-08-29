@@ -23,6 +23,7 @@ from rasa.nlu.classifiers.bert.run_classifier import (
 )
 from rasa.nlu.classifiers.bert.tokenization import FullTokenizer
 from rasa.nlu.classifiers.bert.modeling import BertConfig
+from rasa.nlu.classifiers.compression_utils import resize_bert_weights, sparsity_report
 import logging
 
 logger = logging.getLogger(__name__)
@@ -37,10 +38,6 @@ class BertIntentClassifier(Component):
 
     provides = ["intent", "intent_ranking"]
 
-    hidden_size = 768
-    num_hidden_layers = 12
-    num_attention_heads = 12
-
     defaults = {
         "batch_size": 64,
         "epochs": 2,
@@ -50,25 +47,24 @@ class BertIntentClassifier(Component):
         "save_checkpoints_steps": 1000,
         "max_checkpoints_to_keep": 1000,
         "save_summary_steps": 500,
-        "bert_tfhub_module_handle": "https://tfhub.dev/google/bert_uncased_L-{}_H-{}_A-{}/1".format(
-            num_hidden_layers, hidden_size, num_attention_heads
-        ),
+        "bert_tfhub_module_handle": "https://tfhub.dev/google/bert_uncased_L-12_H-768_A-12/1",
         "pretrained_model_dir": None,
         "checkpoint_dir": "./tmp/bert",
+        "save_checkpoints": False,
         "checkpoint_remove_before_training": True,
         "warm_start_checkpoint": None,
+        "tmp_ckpt_name": "tmp/bert-np-resized/model.ckpt",
         "hat_layer_in_checkpoint": False,
         "tflite_quantise": False,
         "sparsity_technique": None,
         "sparsity_function_exponent": 1,
         "target_sparsity": 0.5,
+        "component_target_sparsities": None,  # alternatively, provide a dict like this: {"k":0.1, "q":0.2,"v":0.3, "ao":0.4, "i":0.5, "o":0.6, "p":0.7}
         "begin_pruning_epoch": 0,
         "end_pruning_epoch": 2,
         "pruning_frequency_steps": 1,
         "finetune_hat_layer_only": False,
         "load_pruning_masks_from_checkpoint": False,
-        "resize_pruned_matrices": False,
-        "create_inference_graph": False,
     }
 
     def _load_bert_params(self, config: Dict[Text, Any]) -> None:
@@ -94,6 +90,7 @@ class BertIntentClassifier(Component):
     def _load_sparsification_params(self, config: Dict[Text, Any]) -> None:
         self.sparsity_technique = config["sparsity_technique"]
         self.target_sparsity = config["target_sparsity"]
+        self.component_target_sparsities = config["component_target_sparsities"]
         self.begin_pruning_epoch = config["begin_pruning_epoch"]
         self.end_pruning_epoch = config["end_pruning_epoch"]
         if self.begin_pruning_epoch > self.epochs:
@@ -108,7 +105,6 @@ class BertIntentClassifier(Component):
         self.load_pruning_masks_from_checkpoint = config[
             "load_pruning_masks_from_checkpoint"
         ]
-        self.resize_pruned_matrices = config["resize_pruned_matrices"]
         self.sparsity_function_exponent = config["sparsity_function_exponent"]
 
     def _load_train_params(self, config: Dict[Text, Any]) -> None:
@@ -120,14 +116,15 @@ class BertIntentClassifier(Component):
         self.save_checkpoints_steps = config["save_checkpoints_steps"]
         self.save_summary_steps = config["save_summary_steps"]
         self.checkpoint_dir = config["checkpoint_dir"]
+        self.save_checkpoints = config["save_checkpoints"]
         self.checkpoint_remove_before_training = config[
             "checkpoint_remove_before_training"
         ]
         self.max_checkpoints_to_keep = config["max_checkpoints_to_keep"]
         self.warm_start_checkpoint = config["warm_start_checkpoint"]
+        self.tmp_ckpt_name = config["tmp_ckpt_name"]
         self.hat_layer_in_checkpoint = config["hat_layer_in_checkpoint"]
         self.finetune_hat_only = config["finetune_hat_layer_only"]
-        self.create_inference_graph = config["create_inference_graph"]
 
     def _load_params(self) -> None:
         self._load_bert_params(self.component_config)
@@ -139,7 +136,6 @@ class BertIntentClassifier(Component):
         component_config=None,
         session: Optional["tf.Session"] = None,
         label_list: Optional[np.ndarray] = None,
-        # predict_fn: Optional["Predictor"] = None,
         tflite_quantise=False,
         important_tensors=None,
     ) -> None:
@@ -149,7 +145,6 @@ class BertIntentClassifier(Component):
 
         self.session = session
         self.label_list = label_list
-        # self.predict_fn = predict_fn
         self.important_tensors = important_tensors
 
         self._load_params()
@@ -167,8 +162,6 @@ class BertIntentClassifier(Component):
             self.tokenizer = create_tokenizer_from_hub_module(
                 self.bert_tfhub_module_handle
             )
-
-        # self.estimator = None
 
         self.tflite_quantise = tflite_quantise
 
@@ -191,11 +184,8 @@ class BertIntentClassifier(Component):
             tf.global_variables_initializer(), tf.local_variables_initializer()
         )
         self.session.run(init)
-        # self.session.run(tf.global_variables_initializer())
 
         pbar = tqdm(range(max(self.epochs, 1)), desc="Epochs")
-        # train_acc = 0
-        # last_loss = 0
         train_step = 0
         for ep in pbar:
             self.session.run(train_init_op, feed_dict={batch_size_in: batch_size})
@@ -216,19 +206,22 @@ class BertIntentClassifier(Component):
                 ep_loss += batch_loss
 
                 if train_step % 10 == 0:
-                    print (
+                    tf.logging.info(
                         "accuracy:{:.3f};loss:{:.4f};train_step:{}".format(
                             batch_acc[0], batch_loss, train_step
                         )
                     )
 
-                if train_step % self.save_checkpoints_steps == 0:
+                if (
+                    self.save_checkpoints
+                    and train_step % self.save_checkpoints_steps == 0
+                ):
                     save_path = saver.save(
                         sess=self.session,
                         save_path=self.checkpoint_dir + "/model.ckpt",
                         global_step=train_step,
                     )
-                    print (
+                    tf.logging.info(
                         "Saved checkpoint for step {}: {}".format(train_step, save_path)
                     )
                 train_step += 1
@@ -241,7 +234,9 @@ class BertIntentClassifier(Component):
             save_path=self.checkpoint_dir + "/model.ckpt",
             global_step=train_step,
         )
-        print ("Saved checkpoint for step {}: {}".format(train_step, save_path))
+        tf.logging.info(
+            "Saved checkpoint for step {}: {}".format(train_step, save_path)
+        )
 
     def train(self, training_data, cfg, **kwargs):
         """Train this component."""
@@ -257,7 +252,7 @@ class BertIntentClassifier(Component):
         train_examples = get_train_examples(training_data.training_examples)
         num_train_steps = int(len(train_examples) / self.batch_size) * self.epochs
         train_steps_per_epoch = int(len(train_examples) / self.batch_size)
-        min_steps = 4
+        min_steps = 2
         if self.epochs <= 0:
             num_train_steps = min_steps
         print ("RUNNING {} EPOCHS, {} STEPS".format(self.epochs, num_train_steps))
@@ -273,7 +268,7 @@ class BertIntentClassifier(Component):
         )
 
         """
-        # creating small representative dataset for full post-training quantisation with TFLite
+        ## Creating small representative dataset for full post-training quantisation with TFLite
         calibration_data = []
         calibration_sample_indices = np.random.choice(range(len(train_features)), size=100, replace=False)
         for idx in calibration_sample_indices:
@@ -284,7 +279,6 @@ class BertIntentClassifier(Component):
             datapoint.append(np.array(f.label_id).reshape(-1).astype(np.int32))
             datapoint.append(np.array(f.segment_ids).reshape(-1, self.max_seq_length).astype(np.int32))
             calibration_data.append(datapoint)
-
         with open('data/calibration_data.pickle', 'wb') as handle:
             pickle.dump(calibration_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
         """
@@ -303,10 +297,6 @@ class BertIntentClassifier(Component):
         if self.epochs <= 0:
             end_pruning_step = begin_pruning_step + min_steps
 
-        logger.info(
-            "Begin pruning: {}, end: {}".format(begin_pruning_step, end_pruning_step)
-        )
-
         params = {
             "batch_size": self.batch_size,
             "sparsity_technique": self.sparsity_technique,
@@ -315,15 +305,18 @@ class BertIntentClassifier(Component):
                 "end_pruning_step": end_pruning_step,
                 "pruning_frequency": self.pruning_frequency_steps,
                 "target_sparsity": self.target_sparsity,
-                "resize_pruned_matrices": self.resize_pruned_matrices,
+                "resize_pruned_matrices": False,
                 "checkpoint_for_pruning_masks": self.warm_start_checkpoint,
                 "sparsity_function_exponent": self.sparsity_function_exponent,
+                "component_target_sparsities": self.component_target_sparsities,
             },
             "finetune_hat_only": self.finetune_hat_only,
         }
+
+        # training graph
         self.graph = tf.Graph()
         with self.graph.as_default() as g:
-            if not self.create_inference_graph:
+            with tf.variable_scope("input_feeding", reuse=tf.AUTO_REUSE):
                 train_dataset = build_input_dataset(
                     features=train_features,
                     seq_length=self.max_seq_length,
@@ -339,58 +332,82 @@ class BertIntentClassifier(Component):
                 )
                 minibatch = iterator.get_next()
                 train_init_op = iterator.make_initializer(train_dataset)
-                train_op, loss, input_tensors, log_probs, predictions, train_acc = build_model(
-                    features=minibatch,
-                    mode="train",
-                    params=params,
-                    bert_tfhub_module_handle=self.bert_tfhub_module_handle,
-                    num_labels=len(self.label_list),
-                    learning_rate=self.learning_rate,
-                    num_train_steps=num_train_steps,
-                    num_warmup_steps=num_warmup_steps,
-                    bert_config=bert_config,
-                )
 
-                writer = tf.summary.FileWriter(
-                    logdir="tfgraph-bert-train", graph=self.graph
-                )
-                writer.flush()
+            train_op, loss, input_tensors, log_probs, predictions, train_acc = build_model(
+                features=minibatch,
+                mode="train",
+                params=params,
+                bert_tfhub_module_handle=self.bert_tfhub_module_handle,
+                num_labels=len(self.label_list),
+                learning_rate=self.learning_rate,
+                num_train_steps=num_train_steps,
+                num_warmup_steps=num_warmup_steps,
+                bert_config=bert_config,
+            )
 
-                trainable_vars = self.graph.get_collection(
-                    tf.GraphKeys.TRAINABLE_VARIABLES
-                )
-                if self.hat_layer_in_checkpoint:
-                    assignment_map = {
-                        v.name.split(":")[0]: v.name.split(":")[0]
-                        for v in trainable_vars
-                    }
-                else:
-                    assignment_map = {
-                        v.name.split(":")[0]: v.name.split(":")[0]
-                        for v in trainable_vars
-                        if v.name.startswith("bert/")
-                    }
-                tf.train.init_from_checkpoint(
-                    self.warm_start_checkpoint, assignment_map=assignment_map
-                )
-                self.session = tf.Session()
-                self._train_tf_dataset(
-                    train_init_op=train_init_op,
-                    batch_size_in=batch_size_in,
-                    batch_size=self.batch_size,
-                    loss=loss,
-                    train_op=train_op,
-                    train_accuracy=train_acc,
-                    num_train_steps=num_train_steps,  # (None if self.epochs > 0 else num_train_steps),
-                    train_steps_per_epoch=train_steps_per_epoch,
-                )
+            writer = tf.summary.FileWriter(
+                logdir="tfgraph-bert-train", graph=self.graph
+            )
+            writer.flush()
 
-                self.input_tensors = input_tensors
-                self.input_tensors["probabilities"] = log_probs
-                self.input_tensors["predictions"] = predictions
-
-                # exit(0)
+            trainable_vars = self.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+            if self.hat_layer_in_checkpoint:
+                assignment_map = {
+                    v.name.split(":")[0]: v.name.split(":")[0] for v in trainable_vars
+                }
             else:
+                assignment_map = {
+                    v.name.split(":")[0]: v.name.split(":")[0]
+                    for v in trainable_vars
+                    if v.name.startswith("bert/")
+                }
+            tf.train.init_from_checkpoint(
+                self.warm_start_checkpoint, assignment_map=assignment_map
+            )
+            self.session = tf.Session()
+            self._train_tf_dataset(
+                train_init_op=train_init_op,
+                batch_size_in=batch_size_in,
+                batch_size=self.batch_size,
+                loss=loss,
+                train_op=train_op,
+                train_accuracy=train_acc,
+                num_train_steps=num_train_steps,
+                train_steps_per_epoch=train_steps_per_epoch,
+            )
+
+            self.input_tensors = input_tensors
+            self.input_tensors["probabilities"] = log_probs
+            self.input_tensors["predictions"] = predictions
+
+        # This just prints out the sparsity (element- and column-wise) of each pruning mask
+        if self.sparsity_technique is not None:
+            sparsity_report(self.graph, self.session)
+
+        # In case of neuron pruning resize the weights before saving all variables
+        # for the inference graph, otherwise simply save everything.
+        if self.sparsity_technique == "neuron_pruning":
+            resized_weights_ckpt = resize_bert_weights(
+                self.graph, self.session, tmp_ckpt_name=self.tmp_ckpt_name
+            )
+            # resized_weights_ckpt = "tmp/bert-tmp/model.ckpt-0"
+            self.warm_start_checkpoint = resized_weights_ckpt
+            params["sparsification_params"][
+                "checkpoint_for_pruning_masks"
+            ] = resized_weights_ckpt
+            params["sparsification_params"]["resize_pruned_matrices"] = True
+        else:
+            with self.graph.as_default():
+                saver = tf.train.Saver()
+                trained_weights_ckpt = saver.save(
+                    self.session, self.tmp_ckpt_name, write_meta_graph=False
+                )
+            self.warm_start_checkpoint = trained_weights_ckpt
+
+        # inference graph
+        self.graph = tf.Graph()
+        with self.graph.as_default() as g:
+            with tf.variable_scope("input_feeding", reuse=tf.AUTO_REUSE):
                 train_dataset = build_input_dataset(
                     features=train_features,
                     seq_length=self.max_seq_length,
@@ -411,53 +428,37 @@ class BertIntentClassifier(Component):
                     )
                     self.input_tensors[input_name] = placeholder
 
-                predictions, log_probs, input_tensors = build_model(
-                    features=self.input_tensors,
-                    mode="predict",
-                    params=params,
-                    bert_tfhub_module_handle=self.bert_tfhub_module_handle,
-                    num_labels=len(self.label_list),
-                    learning_rate=self.learning_rate,
-                    num_train_steps=num_train_steps,
-                    num_warmup_steps=num_warmup_steps,
-                    bert_config=bert_config,
-                )
+            predictions, log_probs, input_tensors = build_model(
+                features=self.input_tensors,
+                mode="predict",
+                params=params,
+                bert_tfhub_module_handle=self.bert_tfhub_module_handle,
+                num_labels=len(self.label_list),
+                learning_rate=self.learning_rate,
+                num_train_steps=num_train_steps,
+                num_warmup_steps=num_warmup_steps,
+                bert_config=bert_config,
+            )
 
-                writer = tf.summary.FileWriter(
-                    logdir="tfgraph-bert-predict", graph=self.graph
-                )
-                writer.flush()
-                # exit(0)
+            writer = tf.summary.FileWriter(
+                logdir="tfgraph-bert-predict", graph=self.graph
+            )
+            writer.flush()
 
-                self.input_tensors["probabilities"] = log_probs
-                self.input_tensors["predictions"] = predictions
+            self.input_tensors["probabilities"] = log_probs
+            self.input_tensors["predictions"] = predictions
 
-                trainable_vars = self.graph.get_collection(
-                    tf.GraphKeys.TRAINABLE_VARIABLES
-                )
+            trainable_vars = self.graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
-                assignment_map = {
-                    v.name.split(":")[0]: v.name.split(":")[0] for v in trainable_vars
-                }
-                tf.train.init_from_checkpoint(
-                    self.warm_start_checkpoint, assignment_map=assignment_map
-                )
+            assignment_map = {
+                v.name.split(":")[0]: v.name.split(":")[0] for v in trainable_vars
+            }
+            tf.train.init_from_checkpoint(
+                self.warm_start_checkpoint, assignment_map=assignment_map
+            )
 
-                self.session = tf.Session()
-                self.session.run(tf.global_variables_initializer())
-
-        """
-        Difference: Tom's weights have module/ wrapped around bert/ and these vars are added:
-        cls/predictions/output_bias
-        cls/predictions/transform/dense/bias
-        cls/predictions/transform/dense/kernel
-        cls/predictions/transform/LayerNorm/beta
-        cls/predictions/transform/LayerNorm/gamma
-        global_step
-
-        Also, as a result of weight pruning, the naming changes like so: kernel->weights and bias->biases
-        Additionally, weight pruning creates weight masks, but no need to worry about those.
-        """
+            self.session = tf.Session()
+            self.session.run(tf.global_variables_initializer())
 
     def process(self, message: Message, **kwargs: Any) -> None:
         """Return the most likely intent and its similarity to the input"""
@@ -471,23 +472,6 @@ class BertIntentClassifier(Component):
 
         # Get first index since we are only classifying text blob at a time.
         example = predict_features[0]
-
-        # size compression: from 408mb to around 110mb in all cases where optimisation is used, without opt it's ~437mb
-        # full (estimator):        116s (0.118s/message). micro f1: 0.884, macro f1: 0.921
-        # tflite, no optims:       597s (0.605s/message). micro f1: 0.884, macro f1: 0.921
-        # tflite, opt_for_size:    1961s (1.99s/message). micro f1: 0.880, macro f1: 0.918
-        # tflite, opt_for_latency: 2040s (2.07s/message). micro f1: 0.880, macro f1: 0.918
-        # weight pruned:           241s (0.244s/message).
-
-        # full (bare)              141s (0.143s/message), 406mb.
-        # neuron pruned (0% avg)   156s (0.158s/message), 406mb. (measured the overhead created by scattering things)
-        # neuron pruned (50% avg)  142s (0.144s/message), 271mb. (k:.9 q:.9 v:.45 ao:.25 i:.45 o:.2 p:.3)
-        # neuron pruned (50% avg)  122s (0.124s/message), 226mb. (cross-pruning of layer output weight matrix)
-        # neuron pruned (50% fix)  134s (0.136s/message), 247mb.
-        # neuron pruned (50% fix)  112s (0.113s/message), 220mb. (cross-pruning of layer output weight matrix)
-        # neuron pruned (56.5% avg)105s (0.106s/message), 205mb. (pruning intermed. more: k:.9 q:.9 v:.45 ao:.25 i:.6 o:.2 p:.3)
-        # neuron pruned (55.9% avg)111s (0.112s/message), 210mb. (everything except k & q pruned *1.2)
-        # neuron pruned (58.5% avg)103s (0.105s/message), 199mb. (everything except k & q pruned *1.2 and i:.6)
 
         start = time.time()
         if self.tflite_quantise:
@@ -516,8 +500,7 @@ class BertIntentClassifier(Component):
             self.interpreter.set_tensor(self.in_indices["segment_ids"], segment_ids)
 
             self.interpreter.invoke()
-            result = self.interpreter.get_tensor(self.out_index)
-            probabilities = list(np.exp(result[0]))
+            log_probs = self.interpreter.get_tensor(self.out_index)
         else:
             probs_op = self.important_tensors["probabilities"]
 
@@ -530,14 +513,14 @@ class BertIntentClassifier(Component):
                     self.important_tensors["input_mask"]: np.array(
                         example.input_mask
                     ).reshape(-1, self.max_seq_length),
-                    # "label_ids": np.array(example.label_id).reshape(-1),
                     self.important_tensors["segment_ids"]: np.array(
                         example.segment_ids
                     ).reshape(-1, self.max_seq_length),
                 },
             )
-            probabilities = list(np.exp(log_probs)[0])
         print ("inference time: {:.3f}".format(time.time() - start))
+
+        probabilities = list(np.exp(log_probs)[0])
 
         index = np.argmax(probabilities)
         label = self.label_list[index]
@@ -570,7 +553,6 @@ class BertIntentClassifier(Component):
         try:
             os.makedirs(os.path.dirname(checkpoint))
         except OSError as e:
-            # be happy if someone already created the path
             import errno
 
             if e.errno != errno.EEXIST:
@@ -635,69 +617,55 @@ class BertIntentClassifier(Component):
 
         if meta["tflite_quantise"]:
             tflite_model_file = "tflite/converted_model_bert.tflite"
-            # in_tensor_names = [
-            #     "input_ids",
-            #     "input_mask",
-            #     "label_ids",
-            #     "segment_ids",
-            # ]
-
             tflite_input_tensors = [
                 input_tensors[name]
                 for name in ["input_ids", "input_mask", "segment_ids"]
             ]
-            tflite_output_tensors = [
-                input_tensors[name] for name in ["probabilities", "predictions"]
-            ]
+            tflite_output_tensors = [input_tensors[name] for name in ["probabilities"]]
             converter = tf.lite.TFLiteConverter.from_session(
                 sess, tflite_input_tensors, tflite_output_tensors
             )
 
-            # """
             converter.optimizations = [
-                # tf.lite.Optimize.DEFAULT  # 4s (~219it/s) (4.604s invoking time)
-                # tf.lite.Optimize.OPTIMIZE_FOR_SIZE # 4s (~220it/s) (4.707s invoking time)
-                # tf.lite.Optimize.OPTIMIZE_FOR_LATENCY # 4s (~215it/s) (4.630s invoking time)
+                # tf.lite.Optimize.DEFAULT
+                # tf.lite.Optimize.OPTIMIZE_FOR_SIZE
+                # tf.lite.Optimize.OPTIMIZE_FOR_LATENCY
             ]
-            # """
 
+            ## Representative dataset for full quantisation with TFLite
+            ## representative dataset: generator, each element is a list of input items,
+            ## items are passed to in_tensors in the order established when creating the converter
+            ## https://github.com/tensorflow/tensorflow/blob/d883916ee45f3af81e81eefb7e8495d9fab6d231/tensorflow/lite/python/optimize/calibration_wrapper.cc#L110
             """
-            # representative dataset: generator, each element is a list of input items, 
-            # items are passed to in_tensors in the order established when creating the converter
-            # https://github.com/tensorflow/tensorflow/blob/d883916ee45f3af81e81eefb7e8495d9fab6d231/tensorflow/lite/python/optimize/calibration_wrapper.cc#L110
             with open('data/calibration_data.pickle', 'rb') as handle:
                 calibration_data = pickle.load(handle)
             def representative_dataset_gen():
-                for d in calibration_data[:5]:
+                for d in calibration_data:
                     yield d
             converter.representative_dataset = tf.lite.RepresentativeDataset(representative_dataset_gen)
             """
 
-            # https://github.com/tensorflow/tensorflow/blob/61128913681a016033143fbe9b60140d983b3c98/tensorflow/lite/tools/optimize/quantize_model.cc
-            print ("QUANTISING...")
+            ## https://github.com/tensorflow/tensorflow/blob/61128913681a016033143fbe9b60140d983b3c98/tensorflow/lite/tools/optimize/quantize_model.cc
             tflite_model = converter.convert()
             open(tflite_model_file, "wb").write(tflite_model)
-            # """
 
             obj = cls(
                 component_config=meta,
                 session=sess,
                 label_list=label_list,
                 predict_fn=predict_fn,
-                use_tflite=True,
+                tflite_quantise=True,
             )
 
             obj.interpreter = tf.lite.Interpreter(model_path=tflite_model_file)
             obj.interpreter.allocate_tensors()
-
             obj.in_indices = {}
-            for i, in_name in enumerate(in_tensor_names):
-                # print(in_name, obj.interpreter.get_input_details()[i]["shape"])
+            for i, in_name in enumerate(["input_ids", "input_mask", "segment_ids"]):
                 obj.in_indices[in_name] = obj.interpreter.get_input_details()[i][
                     "index"
                 ]
-
             obj.out_index = obj.interpreter.get_output_details()[0]["index"]
+            return obj
 
         return cls(
             component_config=meta,
