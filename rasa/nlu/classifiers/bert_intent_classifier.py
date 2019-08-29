@@ -634,9 +634,6 @@ class BertIntentClassifier(Component):
 
             saver.restore(sess, checkpoint)
 
-        writer = tf.summary.FileWriter(logdir="tfgraph-bert-loaded", graph=graph)
-        writer.flush()
-
         if meta["tflite_quantise"]:
             tflite_model_file = "tflite/converted_model_bert.tflite"
             tflite_input_tensors = [
