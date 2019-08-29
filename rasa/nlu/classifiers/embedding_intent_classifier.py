@@ -40,14 +40,6 @@ except ImportError:
     tf = None
 
 
-def get_num_bits(tf_var: "tf.Tensor") -> int:
-    dtype_str = str(tf_var.dtype)
-    num_bits = int("".join([s for s in dtype_str if s.isdigit()]))
-    num_nums = np.prod(tf_var.get_shape().as_list())
-
-    return num_bits * num_nums
-
-
 class EmbeddingIntentClassifier(Component):
     """Intent classifier using supervised embeddings.
 
@@ -145,7 +137,7 @@ class EmbeddingIntentClassifier(Component):
             "embed_layer_a": 256,
             "transformer_a": 2,
         },
-        # real quantisation with TFLite
+        # real quantisation with TFLite (DOES NOT WORK AT THE MOMENT)
         "tflite_quantise": False,
     }
 
@@ -935,9 +927,6 @@ class EmbeddingIntentClassifier(Component):
 
             if self.evaluate_on_num_examples:
                 ids = np.random.permutation(len(X))[: self.evaluate_on_num_examples]
-                # ids = [0, 1, 2]
-                # [print(self.inv_intent_dict[intent]) for intent in intents_for_X[ids]]
-                # exit()
                 X_tensor_val = self._to_sparse_tensor(X[ids])
                 Y_tensor_val = self._to_sparse_tensor(Y[ids])
 
@@ -970,7 +959,6 @@ class EmbeddingIntentClassifier(Component):
                 (train_dataset_output_shapes_X, train_dataset_output_shapes_Y),
                 output_classes=train_dataset.output_classes,
             )
-            # iterator = train_dataset.make_initializable_iterator()
             a_sparse, b_sparse = iterator.get_next()
 
             a_raw = self._sparse_tensor_to_dense(a_sparse, X[0].shape[-1])
@@ -1020,8 +1008,6 @@ class EmbeddingIntentClassifier(Component):
             # train tensorflow graph
             self.session = tf.Session()
 
-            # self._train_tf(X, Y, intents_for_X, negs_in,
-            #                loss, is_training, train_op)
             self._train_tf_dataset(
                 train_init_op, val_init_op, batch_size_in, loss, is_training, train_op
             )
@@ -1220,7 +1206,7 @@ class EmbeddingIntentClassifier(Component):
             self.interpreter.set_tensor(
                 self.a_in_index, X_ready.astype(dtype=np.float32)
             )
-            self.interpreter.invoke()  # this boy takes around 40ms (only around 2ms for uncompressed model)
+            self.interpreter.invoke()
             message_sim = self.interpreter.get_tensor(self.sim_all_index)
         else:
             message_sim = self.session.run(
@@ -1291,23 +1277,6 @@ class EmbeddingIntentClassifier(Component):
             # get features (bag of words) for a message
             X = message.get("text_features")
             X = self._toarray(X)
-
-            # with self.graph.as_default():
-            #     if issparse(X):
-            #         a_sparse = self._to_sparse_tensor([X])
-            #     else:
-            #         a_sparse = self._to_sparse_tensor(X, auto2d=False)
-            #
-            #     a_raw = self._sparse_tensor_to_dense(a_sparse, X[0].shape[-1])
-            #
-            # X = self.session.run(a_raw)
-
-            # stack encoded_all_intents on top of each other
-            # to create candidates for test examples
-            # all_Y = self._create_all_Y(X.shape[0])
-
-            # load tf graph and session
-            # intent_ids, message_sim = self._calculate_message_sim(X, all_Y)
 
             intent_ids, message_sim = self._calculate_message_sim_all(X)
 
@@ -1478,8 +1447,10 @@ class EmbeddingIntentClassifier(Component):
     ) -> "EmbeddingIntentClassifier":
         if model_dir and meta.get("file"):
             tflite_model_file = "tflite/converted_model.tflite"
-            if meta["tflite_quantise"]:
-                obj = cls.create_simpler_graph(
+
+            # Apply TFLite to transformer (requires building a slightly different inference graph).
+            if meta["tflite_quantise"] and self.transformer:
+                obj = cls.tflite_quantised_transformer_graph(
                     meta=meta,
                     model_dir=model_dir,
                     model_metadata=model_metadata,
@@ -1504,6 +1475,8 @@ class EmbeddingIntentClassifier(Component):
                 ]
 
                 return obj
+
+            # Use transformer without TFLite, or other architecture
             else:
                 file_name = meta.get("file")
                 checkpoint = os.path.join(model_dir, file_name + ".ckpt")
@@ -1527,8 +1500,9 @@ class EmbeddingIntentClassifier(Component):
 
                 graph = tf.Graph()
                 with graph.as_default():
-                    print ("loading...")
                     sess = tf.Session()
+
+                    # LSTM without TFLite
                     if meta["gpu_lstm"]:
                         # rebuild tf graph for prediction
                         with io.open(
@@ -1591,14 +1565,11 @@ class EmbeddingIntentClassifier(Component):
 
                         saver = tf.train.Saver()
 
+                    # BOW model (possibly with TFLite)
                     else:
                         saver = tf.train.import_meta_graph(checkpoint + ".meta")
-                        # Speed on Sara test data (using extremely deep BOW model):
-                        # 5s (~170it/s) using full model (6.605s invoking time)
-                        # 5s (~185it/s) using converted model without any optimisation (6.308s invoking time)
-                        convert = False
-                        if convert:
-                            print ("converting")
+
+                        if meta["tflite_quantise"]:
                             a_in = tf.get_collection("message_placeholder")[0]
                             b_in = tf.get_collection("intent_placeholder")[0]
 
@@ -1627,9 +1598,9 @@ class EmbeddingIntentClassifier(Component):
                             )
 
                             converter.optimizations = [
-                                # tf.lite.Optimize.DEFAULT # 4s (~219it/s) (4.604s invoking time)
-                                # tf.lite.Optimize.OPTIMIZE_FOR_SIZE # 4s (~220it/s) (4.707s invoking time)
-                                # tf.lite.Optimize.OPTIMIZE_FOR_LATENCY # 4s (~215it/s) (4.630s invoking time)
+                                # tf.lite.Optimize.DEFAULT
+                                # tf.lite.Optimize.OPTIMIZE_FOR_SIZE
+                                # tf.lite.Optimize.OPTIMIZE_FOR_LATENCY
                             ]
                             tflite_model = converter.convert()
                             open(tflite_model_file, "wb").write(tflite_model)
@@ -1669,6 +1640,8 @@ class EmbeddingIntentClassifier(Component):
                             ]
 
                             return obj
+
+                        # BOW without TFLite
                         else:
                             a_in = tf.get_collection("message_placeholder")[0]
                             b_in = tf.get_collection("intent_placeholder")[0]
@@ -1684,6 +1657,7 @@ class EmbeddingIntentClassifier(Component):
                             intent_embed = tf.get_collection("intent_embed")[0]
                             saver.restore(sess, checkpoint)
 
+                # Apply fake quantisation (only if TFLite conversion hasn't been applied)
                 if meta["fake_quantise"]:
                     for scope, num_clusters in meta["quantisation_rates"].items():
                         variables = [
@@ -1718,6 +1692,7 @@ class EmbeddingIntentClassifier(Component):
             )
             return cls(component_config=meta)
 
+    # transformer prediction graph (adapted for TFLite compatibility)
     @classmethod
     def transformer_prediction(
         cls,
@@ -1728,13 +1703,12 @@ class EmbeddingIntentClassifier(Component):
     ) -> "tf.Tensor":
         reg = tf.contrib.layers.l2_regularizer(meta["C2"])
 
-        # mask different length sequences
+        # mask different length sequences.
+        # This masking is cleverly changed to not use TFLite-unsupported ops.
         # mask = tf.sign(tf.reduce_max(x_in, -1)) # [B, L, C] -> [B, L] get 1 from one-hot vectors of real tokens, 0 from padded tokens
         mask_raw = tf.reduce_max(tf.abs(x_in), -1)
         mask = tf.cast(tf.greater(mask_raw, 0), dtype=tf.float32)
-
         mask_inv = 1 - mask
-        # print(sess.run([mask, mask_inv]))
         pad_pre = [[0, 0], [1, 0]]
         pad_post = [[0, 0], [0, 1]]
         mask_padded = tf.pad(mask, pad_post)
@@ -1742,34 +1716,6 @@ class EmbeddingIntentClassifier(Component):
         last = (1 - tf.abs(mask_padded - mask_inv_padded))[
             0:, 1:
         ]  # [B, L] 1 in place of the last real token
-
-        # TOCO: Check failed: start_indices_size <= num_input_axes (3 vs. 2)StridedSlice op requires no more than 2 start indices
-
-        # new
-        # """
-        # print("Original mask shape", mask.shape)
-        # mask_raw = tf.reduce_max(tf.abs(x_in), -1)
-        # zeros = tf.zeros_like(mask_raw)
-        # mask = tf.cast(tf.greater(mask_raw, 0), dtype=tf.float32)
-        # print("New mask shape", mask.shape)
-
-        # mask_inv = 1 - mask
-        # pad_pre = [[0, 0], [1, 0]]
-        # pad_post = [[0, 0], [0, 1]]
-        # mask_padded = tf.pad(mask, pad_pre)
-        # mask_inv_padded = tf.pad(mask_inv, pad_post)
-        # last = (1 - tf.abs(mask_padded - mask_inv_padded))[
-        #     0, 1:
-        # ]  # [B, L] 1 in place of the last real token
-        # mask = tf.reduce_sum(mask, axis=1)  # [B] index of the last real token
-        # # """
-
-        # # old
-        # last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
-        # print(last.shape)
-        # mask = tf.cumsum(last, axis=1, reverse=True)
-        # print(mask.shape)
-        # # old
 
         last = tf.expand_dims(last, -1)
 
@@ -1788,7 +1734,6 @@ class EmbeddingIntentClassifier(Component):
         # it seems to be factor of 4 for transformer architectures in t2t
         hparams.filter_size = layer_sizes[0] * 4
         hparams.num_heads = meta["num_heads"]
-        # hparams.relu_dropout = self.droprate
         hparams.pos = meta["pos_encoding"]
 
         hparams.max_length = meta["max_seq_length"]
@@ -1842,10 +1787,8 @@ class EmbeddingIntentClassifier(Component):
                 x,
                 self_attention_bias,
                 hparams,
-                # nonpadding=mask,
                 attn_bias_for_padding=attn_bias_for_padding,
             )
-            # exit(0)
 
         if meta["use_last"]:
             x = tf.reduce_sum(x * last, 1)
@@ -1858,6 +1801,7 @@ class EmbeddingIntentClassifier(Component):
 
         return x
 
+    # adapted for TFLite from _tf_sim()
     @classmethod
     def _tf_sim_static(
         cls, a: "tf.Tensor", b: "tf.Tensor", meta: Dict[Text, Any]
@@ -1898,7 +1842,7 @@ class EmbeddingIntentClassifier(Component):
 
     # noinspection PyPep8Naming
     @classmethod
-    def create_simpler_graph(
+    def tflite_quantised_transformer_graph(
         cls,
         meta: Dict[Text, Any],
         model_dir: Text = None,
@@ -1935,8 +1879,6 @@ class EmbeddingIntentClassifier(Component):
 
             ## prediction graph
             batch_size = 1
-            seq_len = 10
-
             all_intents_embed_in = tf.placeholder(
                 tf.float32, all_intents_embed_values.shape, name="all_intents_embed"
             )
@@ -1980,9 +1922,7 @@ class EmbeddingIntentClassifier(Component):
             all_b = intent_embed[tf.newaxis, :, :]
             tiled_intent_embed = tf.tile(all_b, [batch_size, 1, 1])
 
-            print ("Intents_in", all_intents_embed_in.shape)
-
-            # sim_op, _, _ = cls._tf_sim_static(word_embed, tiled_intent_embed, meta)
+            print ("intents_in", all_intents_embed_in.shape)
 
             sim_all, _, _ = cls._tf_sim_static(word_embed, all_intents_embed_in, meta)
 
@@ -2004,7 +1944,6 @@ class EmbeddingIntentClassifier(Component):
                 sess, in_tensors, out_tensors
             )
 
-            # takes ~110s when any of these are enabled (otherwise, takes ~35s)
             converter.optimizations = [
                 # tf.lite.Optimize.DEFAULT
                 # tf.lite.Optimize.OPTIMIZE_FOR_SIZE
