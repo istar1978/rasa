@@ -64,9 +64,7 @@ def run(data_path: Text):
 
             if entity and offset >= entity["end"]:
                 entity_index += 1
-                new_tokens[-1] = "{}]({}:{})".format(
-                    new_tokens[-1], entity["entity"], entity["value"]
-                )
+                new_tokens[-1] = "{}]({})".format(new_tokens[-1], entity["entity"])
 
             entity = (
                 entities[entity_index]

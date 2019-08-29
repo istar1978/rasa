@@ -27,7 +27,6 @@ DEFAULT_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "CRFEntityExtracto
 SPACY_PIPELINE = [
     {"name": "SpacyNLP"},
     {"name": "SpacyTokenizer"},
-    {"name": "SpacyFeaturizer"},
     {
         "name": "CRFEntityExtractor",
         "features": [
@@ -84,12 +83,12 @@ def evaluate_model(
 
 def run(
     data_path: Text,
-    runs: int = 5,
-    pipeline: List[Dict] = DEFAULT_PIPELINE,
-    pipeline_name: Text = "default_pipeline",
-    train_frac: float = 0.8,
-    typo: bool = False,
-    output_folder: Text = "results/rasa",
+    runs: int,
+    pipeline: List[Dict],
+    pipeline_name: Text,
+    train_frac: float,
+    typo: bool,
+    output_folder: Text,
 ):
     set_log_level(30)
     print (
@@ -135,12 +134,12 @@ if __name__ == "__main__":
     output_folder = "results/rasa"
 
     data_sets = [
-        "data/AddToPlaylist",
-        "data/BookRestaurant",
-        "data/GetWeather",
-        "data/RateBook",
-        "data/SearchCreativeWork",
-        "data/SearchScreeningEvent",
+        # "data/AddToPlaylist",
+        # "data/BookRestaurant",
+        # "data/GetWeather",
+        # "data/RateBook",
+        # "data/SearchCreativeWork",
+        # "data/SearchScreeningEvent",
         "data/BTC",
         "data/re3d",
         "data/WNUT17",
@@ -154,8 +153,8 @@ if __name__ == "__main__":
         # (FLAIR_PIPELINE, "flair_pipeline")
     ]
 
-    for typo in [False]:
-        for train_frac in [0.8]:
+    for typo in [False, True]:
+        for train_frac in [0.5, 0.8]:
             for pipeline, pipeline_name in pipelines:
                 for data_set in data_sets:
                     try:
@@ -166,7 +165,7 @@ if __name__ == "__main__":
                             typo=typo,
                             train_frac=train_frac,
                             output_folder=output_folder,
-                            runs=5,
+                            runs=1,
                         )
                     except Exception as e:
                         print ("#" * 100)
