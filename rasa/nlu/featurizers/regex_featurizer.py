@@ -73,7 +73,8 @@ class RegexFeaturizer(Featurizer):
 
         found_patterns = []
         for exp in self.known_patterns:
-            matches = re.finditer(exp["pattern"], message.text)
+            joined_tokens = " ".join(t.text for t in message.get("tokens", []))
+            matches = re.finditer(exp["pattern"], joined_tokens)
             matches = list(matches)
             found_patterns.append(False)
             for token_index, t in enumerate(message.get("tokens", [])):
