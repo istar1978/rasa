@@ -463,7 +463,7 @@ class CRFEntityExtractor(EntityExtractor):
                 collected.append(t)
             elif collected:
                 collected_text = " ".join([t.text for t in collected])
-                logger.warning(
+                logger.debug(
                     "Misaligned entity annotation for '{}' "
                     "in sentence '{}' with intent '{}'. "
                     "Make sure the start and end values of the "
