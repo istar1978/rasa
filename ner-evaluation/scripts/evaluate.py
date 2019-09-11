@@ -255,17 +255,12 @@ if __name__ == "__main__":
     pipeline = pipelines[args.pipeline][0]
     pipeline_name = pipelines[args.pipeline][1]
 
-    try:
-        run(
-            args.data,
-            pipeline=pipeline,
-            pipeline_name=pipeline_name,
-            typo=args.typo,
-            train_frac=args.train_frac,
-            output_folder=args.output,
-            runs=args.runs,
-        )
-    except Exception as e:
-        print ("#" * 100)
-        traceback.print_exc()
-        print ("#" * 100)
+    run(
+        args.data,
+        pipeline=pipeline,
+        pipeline_name=pipeline_name,
+        typo=args.typo,
+        train_frac=args.train_frac,
+        output_folder=args.output,
+        runs=args.runs,
+    )

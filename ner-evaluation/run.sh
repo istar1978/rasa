@@ -28,17 +28,26 @@ RUNS=5
 OUTPUT="results"
 REPORTING="no"
 
+LOG_FOLDER="logs"
+mkdir $LOG_FOLDER
+
 for data_folder in "${DATA_FOLDERS[@]}";
 do
+    LOCAL_DATA_FOLDER="tmp/$data_folder"
+
+    LOG_FILE="$LOG_FOLDER/$(basename $data_folder).txt"
+    if [ -f "$LOG_FILE" ]; then
+        rm $LOG_FILE
+    fi
+
+    NUMBER_OF_EXPERIMENTS=$((${#PIPELINES[@]} * ${#TYPO[@]} * ${#TRAIN_FRAC[@]}))
+    CURRENT_EXPERIMENT=0
+
+    # report start of evaluation
     if [[ "$REPORTING" == "yes" ]]; then
         NOTIFICATION="<@UGW2TPJF8> Starting evaluation on $data_folder."
         curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"$NOTIFICATION\"}" https://hooks.slack.com/services/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
     fi
-
-    LOCAL_DATA_FOLDER="tmp/$data_folder"
-
-    NUMBER_OF_EXPERIMENTS=$((${#PIPELINES[@]} * ${#TYPO[@]} * ${#TRAIN_FRAC[@]}))
-    CURRENT_EXPERIMENT=0
 
     # download data
     if [ -d "$LOCAL_DATA_FOLDER" ]; then
@@ -56,18 +65,20 @@ do
             do
                 for typo in "${TYPO[@]}";
                 do
-
-                    if ! ((CURRENT_EXPERIMENT % 4)); then
-                        if [[ "$REPORTING" == "yes" ]]; then
-                            NOTIFICATION="<@UGW2TPJF8> Experiment $CURRENT_EXPERIMENT/$NUMBER_OF_EXPERIMENTS on $data_folder running."
-                            curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"$NOTIFICATION\"}" https://hooks.slack.com/services/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
-                        fi
-                    fi
+                    echo "Experiment $CURRENT_EXPERIMENT/$NUMBER_OF_EXPERIMENTS on $data_folder is running."
 
                     if [[ "$typo" == "yes" ]]; then
-                        python scripts/evaluate.py --typo --output $OUTPUT --runs $RUNS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER
+                        python scripts/evaluate.py --typo --output $OUTPUT --runs $RUNS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER &>> $LOG_FILE
                     else
-                        python scripts/evaluate.py --output $OUTPUT --runs $RUNS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER
+                        python scripts/evaluate.py --output $OUTPUT --runs $RUNS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER &>> $LOG_FILE
+                    fi
+
+                    if [ $? -ne 0 ]; then
+                        NOTIFICATION="<@UGW2TPJF8> Experiment $CURRENT_EXPERIMENT/$NUMBER_OF_EXPERIMENTS on $data_folder failed!"
+                        echo $NOTIFICATION
+                        if [[ "$REPORTING" == "yes" ]]; then
+                            curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"$NOTIFICATION\"}" https://hooks.slack.com/services/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
+                        fi
                     fi
 
                     CURRENT_EXPERIMENT=$((CURRENT_EXPERIMENT + 1))
@@ -80,6 +91,7 @@ do
         rm -r $LOCAL_DATA_FOLDER
     fi
 
+    # report end of evaluation
     if [[ "$REPORTING" == "yes" ]]; then
         NOTIFICATION="<@UGW2TPJF8> Finished evaluation on $data_folder."
         curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"$NOTIFICATION\"}" https://hooks.slack.com/services/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
