@@ -29,7 +29,11 @@ OUTPUT="results"
 REPORTING="no"
 
 LOG_FOLDER="logs"
-mkdir $LOG_FOLDER
+if [ -d "$LOG_FOLDER" ]; then
+    echo "$LOG_FOLDER already exists."
+else
+    mkdir $LOG_FOLDER
+fi
 
 for data_folder in "${DATA_FOLDERS[@]}";
 do
