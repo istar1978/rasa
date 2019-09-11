@@ -152,7 +152,7 @@ def evaluate_model(
 
     result = {"entity_evaluation": None}
 
-    _, entity_results = get_eval_data(interpreter, test_data)
+    _, _, entity_results = get_eval_data(interpreter, test_data)
 
     extractors = get_entity_extractors(interpreter)
 
@@ -175,8 +175,8 @@ def run(
 ):
     set_log_level(30)
     print (
-        "Evaluating pipeline '{}' on dataset '{}' (typo: {}, train_frac: {}).".format(
-            pipeline_name, data_path, typo, train_frac
+        "Evaluating pipeline '{}' on dataset '{}' (typo: {}, train_frac: {}, runs: {}).".format(
+            pipeline_name, data_path, typo, train_frac, runs
         )
     )
 
@@ -211,6 +211,12 @@ def run(
 
     write_results(result_file, accuracy, f1_score, precision)
     write_config(configuration_file, runs, train_frac, pipeline)
+
+    print (
+        "Done evaluating pipeline '{}' on dataset '{}'. Results written to '{}'.".format(
+            pipeline_name, data_path, report_folder
+        )
+    )
 
 
 if __name__ == "__main__":
