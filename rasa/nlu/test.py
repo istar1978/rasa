@@ -36,7 +36,7 @@ from rasa.nlu.tokenizers import Token
 
 logger = logging.getLogger(__name__)
 
-PRETRAINED_EXTRACTORS = {"DucklingHTTPExtractor", "SpacyEntityExtractor"}
+PRETRAINED_EXTRACTORS = {"DucklingHTTPExtractor"}
 
 ENTITY_PROCESSORS = {"EntitySynonymMapper"}
 

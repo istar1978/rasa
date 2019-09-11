@@ -37,7 +37,7 @@ class FlairEntityExtractor(EntityExtractor):
         "hidden_size": 256,
         "learning_rate": 0.1,
         "mini_batch_size": 16,
-        "max_epochs": 2,
+        "max_epochs": 50,
         "use_glove_embeddings": True,
         "use_flair_embeddings": True,
     }
