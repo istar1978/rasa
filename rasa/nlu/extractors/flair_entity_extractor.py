@@ -82,9 +82,9 @@ class FlairEntityExtractor(EntityExtractor):
         sentences = []
 
         for ex in data_train.training_examples:
-            sentence = Sentence(ex.text)
+            sentence = Sentence(ex.text, use_tokenizer=True)
             for token in sentence.tokens:
-                for entity in ex.get("entities"):
+                for entity in ex.get("entities", []):
                     if (
                         token.start_pos >= entity["start"]
                         and token.end_pos <= entity["end"]

@@ -125,7 +125,8 @@ if __name__ == "__main__":
         # "data/WNUT17/train.md",
         # "data/Ritter/test.md",
         # "data/Ritter/dev.md",
-        "data/Ritter/train.md"
+        # "data/Ritter/train.md"
+        "data/CCPE/data.md"
     ]
 
     for data_set in data_sets:

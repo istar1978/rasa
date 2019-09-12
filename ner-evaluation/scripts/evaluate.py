@@ -224,9 +224,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Named-Entity-Recognition Evaluation")
     parser.add_argument("data", type=str, help="path to dataset folder")
-    parser.add_argument(
-        "--output", type=str, default="results/rasa", help="output folder"
-    )
+    parser.add_argument("--output", type=str, default="results", help="output folder")
     parser.add_argument(
         "--pipeline",
         type=str,
