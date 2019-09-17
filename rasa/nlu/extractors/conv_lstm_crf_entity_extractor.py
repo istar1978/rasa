@@ -74,7 +74,6 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         indices: List[int] = None,
         num_tags: int = None,
         num_chars: int = None,
-        pred_model: tf.Tensor = None,
     ) -> None:
 
         self._load_params(component_config)
@@ -88,7 +87,14 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         self.indices = indices
         self.num_tags = num_tags
         self.num_chars = num_chars
-        self.pred_model = pred_model
+
+        self.chars = None
+        self.nchars = None
+        self.words = None
+        self.nwords = None
+
+        self.predictions = None
+        self.embeddings = None
 
         super(ConvLstmCrfEntityExtractor, self).__init__(component_config)
 
@@ -116,7 +122,7 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
 
             self.session = tf.Session()
 
-            loss, metrics = self._model(iterator)
+            loss, metrics = self._build_train_graph(iterator)
             train_op = tf.train.AdamOptimizer().minimize(loss)
 
             self.session.run(tf.global_variables_initializer())
@@ -125,22 +131,25 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
 
             self._train_model(self.session, train_init_op, train_op, loss, metrics)
 
+            self.predictions = self._build_prediction_graph()
+
     def process(self, message: Message, **kwargs: Any) -> None:
         with self.graph.as_default():
-            tf_dataset = self._create_dataset([message], shuffle_and_repeat=False)
+            features, _ = self._convert_message(message)
+            (words, nwords), (chars, nchars) = features
 
-            iterator = tf.data.Iterator.from_structure(
-                tf_dataset.output_types,
-                tf_dataset.output_shapes,
-                output_classes=tf_dataset.output_classes,
+            p = self.session.run(
+                self.predictions,
+                feed_dict={
+                    self.words: [words],
+                    self.nwords: [nwords],
+                    self.chars: [chars],
+                    self.nchars: [nchars],
+                },
             )
-            pred_init_op = iterator.make_initializer(tf_dataset)
 
-            self.pred_model = self._prediction_model()
-
-            self.session.run(pred_init_op)
-            predictions = self.session.run(self.pred_model)
-            print (predictions)
+            print (message.text)
+            print (p)
 
     @classmethod
     def load(
@@ -222,7 +231,7 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
             train_utils.persist_tensor("vocab_words", self.vocab_words, self.graph)
             train_utils.persist_tensor("vocab_chars", self.vocab_chars, self.graph)
             train_utils.persist_tensor("vocab_tags", self.vocab_tags, self.graph)
-            train_utils.persist_tensor("pred_model", self.pred_model, self.graph)
+            train_utils.persist_tensor("predictions", self.predictions, self.graph)
 
             saver = tf.train.Saver()
             saver.save(self.session, checkpoint)
@@ -256,26 +265,27 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         self.num_tags = len(self.indices) + 1
         self.num_chars = len(chars) + self.params["num_oov_buckets"]
 
+    def _convert_message(self, data: Message):
+        tokens = data.get("tokens", [])
+        entities = data.get("entities", [])
+
+        # Encode in Bytes for TF
+        words = [w.text.encode() for w in tokens]
+        tags = [determine_token_labels(w, entities, None).encode() for w in tokens]
+        assert len(words) == len(tags), "Words and tags lengths don't match"
+
+        # Chars
+        chars = [[c.encode() for c in w.text] for w in tokens]
+        lengths = [len(c) for c in chars]
+        max_len = max(lengths)
+        chars = [c + [b"<pad>"] * (max_len - l) for c, l in zip(chars, lengths)]
+        return ((words, len(words)), (chars, lengths)), tags
+
     def _convert_to_words_tags(self, data: List[Message]):
         for example in data:
-            tokens = example.get("tokens", [])
-            entities = example.get("entities", [])
+            yield self._convert_message(example)
 
-            # Encode in Bytes for TF
-            words = [w.text.encode() for w in tokens]
-            tags = [determine_token_labels(w, entities, None).encode() for w in tokens]
-            assert len(words) == len(tags), "Words and tags lengths don't match"
-
-            # Chars
-            chars = [[c.encode() for c in w.text] for w in tokens]
-            lengths = [len(c) for c in chars]
-            max_len = max(lengths)
-            chars = [c + [b"<pad>"] * (max_len - l) for c, l in zip(chars, lengths)]
-            yield ((words, len(words)), (chars, lengths)), tags
-
-    def _create_dataset(
-        self, data: List[Message], shuffle_and_repeat: bool = True, batch: bool = True
-    ):
+    def _create_dataset(self, data: List[Message], shuffle_and_repeat: bool = True):
         params = self.params if self.params is not None else {}
 
         shapes = (
@@ -297,98 +307,128 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         if shuffle_and_repeat:
             dataset = dataset.shuffle(params["buffer"]).repeat(params["epochs"])
 
-        if batch:
-            dataset = dataset.padded_batch(
-                params.get("batch_size", params["batch_size"]), shapes, defaults
-            ).prefetch(1)
+        dataset = dataset.padded_batch(
+            params.get("batch_size", params["batch_size"]), shapes, defaults
+        ).prefetch(1)
 
         return dataset
 
-    def _model(self, iterator: tf.data.Iterator, training: bool = True):
+    def _build_train_graph(self, iterator: tf.data.Iterator, training: bool = True):
         dropout = self.params["dropout"]
 
         # Read vocabs and inputs
-        features, labels = iterator.get_next()  # placeholders
-        (words, nwords), (chars, nchars) = features
+        features, labels = iterator.get_next()
+        (self.words, self.nwords), (self.chars, self.nchars) = features
 
-        # Char Embeddings
-        char_ids = self.vocab_chars.lookup(chars)
-        variable = tf.get_variable(
-            "chars_embeddings",
-            [self.num_chars + 1, self.params["dim_chars"]],
-            tf.float32,
-        )
-        char_embeddings = tf.nn.embedding_lookup(variable, char_ids)
-        char_embeddings = tf.layers.dropout(
-            char_embeddings, rate=dropout, training=training
-        )
-
-        # Char 1d convolution
-        weights = tf.sequence_mask(nchars)
-        char_embeddings = self._masked_conv1d_and_max(
-            char_embeddings, weights, self.params["filters"], self.params["kernel_size"]
-        )
-
-        # Word Embeddings
-        word_ids = self.vocab_words.lookup(words)
-        glove = np.load(
-            "/Users/tabergma/Repositories/tf_ner/data/example/WNUT17/glove.npz"
-        )[
-            "embeddings"
-        ]  # np.array
-        variable = np.vstack([glove, [[0.0] * self.params["dim"]]])
-        variable = tf.Variable(variable, dtype=tf.float32, trainable=False)
-        word_embeddings = tf.nn.embedding_lookup(variable, word_ids)
-
-        # Concatenate Word and Char Embeddings
-        embeddings = tf.concat([word_embeddings, char_embeddings], axis=-1)
-        embeddings = tf.layers.dropout(embeddings, rate=dropout, training=training)
+        self._featurization(dropout, training)
 
         # LSTM
-        t = tf.transpose(embeddings, perm=[1, 0, 2])  # Need time-major
+        t = tf.transpose(self.embeddings, perm=[1, 0, 2])  # Need time-major
         lstm_cell_fw = tf.contrib.rnn.LSTMBlockFusedCell(self.params["lstm_size"])
         lstm_cell_bw = tf.contrib.rnn.LSTMBlockFusedCell(self.params["lstm_size"])
         lstm_cell_bw = tf.contrib.rnn.TimeReversedFusedRNN(lstm_cell_bw)
-        output_fw, _ = lstm_cell_fw(t, dtype=tf.float32, sequence_length=nwords)
-        output_bw, _ = lstm_cell_bw(t, dtype=tf.float32, sequence_length=nwords)
+        output_fw, _ = lstm_cell_fw(t, dtype=tf.float32, sequence_length=self.nwords)
+        output_bw, _ = lstm_cell_bw(t, dtype=tf.float32, sequence_length=self.nwords)
         output = tf.concat([output_fw, output_bw], axis=-1)
         output = tf.transpose(output, perm=[1, 0, 2])
         output = tf.layers.dropout(output, rate=dropout, training=training)
 
         # CRF
-        logits = tf.layers.dense(output, self.num_tags)
-        crf_params = tf.get_variable(
+        self.logits = tf.layers.dense(output, self.num_tags)
+        self.crf_params = tf.get_variable(
             "crf", [self.num_tags, self.num_tags], dtype=tf.float32
         )
-        self.pred_ids, _ = tf.contrib.crf.crf_decode(logits, crf_params, nwords)
+        pred_ids, _ = tf.contrib.crf.crf_decode(
+            self.logits, self.crf_params, self.nwords
+        )
 
         # Loss
         tags = self.vocab_tags.lookup(labels)
         log_likelihood, _ = tf.contrib.crf.crf_log_likelihood(
-            logits, tags, nwords, crf_params
+            self.logits, tags, self.nwords, self.crf_params
         )
         loss = tf.reduce_mean(-log_likelihood)
 
         # Metrics
-        weights = tf.sequence_mask(nwords)
+        weights = tf.sequence_mask(self.nwords)
         metrics = {
-            "acc": tf.metrics.accuracy(tags, self.pred_ids, weights),
+            "acc": tf.metrics.accuracy(tags, pred_ids, weights),
             "precision": precision(
-                tags, self.pred_ids, self.num_tags, self.indices, weights
+                tags, pred_ids, self.num_tags, self.indices, weights
             ),
-            "recall": recall(tags, self.pred_ids, self.num_tags, self.indices, weights),
-            "f1": f1(tags, self.pred_ids, self.num_tags, self.indices, weights),
+            "recall": recall(tags, pred_ids, self.num_tags, self.indices, weights),
+            "f1": f1(tags, pred_ids, self.num_tags, self.indices, weights),
         }
         for metric_name, op in metrics.items():
             tf.summary.scalar(metric_name, op[1])
 
         return loss, metrics
 
-    def _prediction_model(self):
+    def _featurization(self, dropout: Optional[float] = None, training: bool = True):
+        phase = "training" if training else "prediction"
+
+        with tf.variable_scope(phase):
+            # Char Embeddings
+            char_ids = self.vocab_chars.lookup(self.chars)
+            variable = tf.get_variable(
+                "chars_embeddings",
+                [self.num_chars + 1, self.params["dim_chars"]],
+                tf.float32,
+            )
+            char_embeddings = tf.nn.embedding_lookup(variable, char_ids)
+            char_embeddings = tf.layers.dropout(
+                char_embeddings, rate=dropout, training=training
+            )
+
+            # Char 1d convolution
+            weights = tf.sequence_mask(self.nchars)
+            char_embeddings = self._masked_conv1d_and_max(
+                char_embeddings,
+                weights,
+                self.params["filters"],
+                self.params["kernel_size"],
+            )
+
+            # Word Embeddings
+            word_ids = self.vocab_words.lookup(self.words)
+            glove = np.load(
+                "/Users/tabergma/Repositories/tf_ner/data/example/WNUT17/glove.npz"
+            )[
+                "embeddings"
+            ]  # np.array
+            variable = np.vstack([glove, [[0.0] * self.params["dim"]]])
+            variable = tf.Variable(variable, dtype=tf.float32, trainable=False)
+            word_embeddings = tf.nn.embedding_lookup(variable, word_ids)
+
+            # Concatenate Word and Char Embeddings
+            embeddings = tf.concat([word_embeddings, char_embeddings], axis=-1)
+            embeddings = tf.layers.dropout(embeddings, rate=dropout, training=training)
+
+            self.embeddings = embeddings
+
+            print (self.words)
+            print (self.embeddings)
+
+    def _build_prediction_graph(self):
+        # Read vocabs and inputs
+
+        self.words = tf.placeholder(dtype=tf.string, shape=(None, None))
+        self.nwords = tf.placeholder(dtype=tf.int32, shape=(None))
+        self.chars = tf.placeholder(dtype=tf.string, shape=(None, None, None))
+        self.nchars = tf.placeholder(dtype=tf.int32, shape=(None, None))
+
+        self._featurization(training=False)
+
+        # CRF
+        pred_ids, _ = tf.contrib.crf.crf_decode(
+            self.logits, self.crf_params, self.nwords
+        )
+
         # Predictions
         reverse_vocab_tags = self.reverse_vocab_tags
-        pred_strings = reverse_vocab_tags.lookup(tf.to_int64(self.pred_ids))
-        predictions = {"pred_ids": self.pred_ids, "tags": pred_strings}
+        pred_strings = reverse_vocab_tags.lookup(tf.to_int64(pred_ids))
+        predictions = {"pred_ids": pred_ids, "tags": pred_strings}
+
         return predictions
 
     def _masked_conv1d_and_max(self, t, weights, filters, kernel_size):
