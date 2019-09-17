@@ -15,6 +15,7 @@ from rasa.nlu.test import (
     do_entities_overlap,
     merge_labels,
     remove_empty_intent_examples,
+    remove_empty_response_examples,
     get_entity_extractors,
     remove_pretrained_extractors,
     drop_intents_below_freq,
@@ -23,11 +24,15 @@ from rasa.nlu.test import (
     substitute_labels,
     IntentEvaluationResult,
     EntityEvaluationResult,
+    ResponseSelectionEvaluationResult,
     evaluate_intents,
     evaluate_entities,
+    evaluate_response_selections,
     get_unique_labels,
     get_evaluation_metrics,
     NO_ENTITY,
+    collect_successful_entity_predictions,
+    collect_incorrect_entity_predictions,
 )
 from rasa.nlu.test import does_token_cross_borders
 from rasa.nlu.test import align_entity_predictions
@@ -142,9 +147,11 @@ EN_predicted = [
     },
 ]
 
-EN_entity_result = EntityEvaluationResult(EN_targets, EN_predicted, EN_tokens)
+EN_entity_result = EntityEvaluationResult(
+    EN_targets, EN_predicted, EN_tokens, " ".join([t.text for t in EN_tokens])
+)
 
-EN_entity_result_no_tokens = EntityEvaluationResult(EN_targets, EN_predicted, [])
+EN_entity_result_no_tokens = EntityEvaluationResult(EN_targets, EN_predicted, [], "")
 
 
 def test_token_entity_intersection():
@@ -234,7 +241,13 @@ def test_label_merging():
 def test_drop_intents_below_freq():
     td = training_data.load_data("data/examples/rasa/demo-rasa.json")
     clean_td = drop_intents_below_freq(td, 0)
-    assert clean_td.intents == {"affirm", "goodbye", "greet", "restaurant_search"}
+    assert clean_td.intents == {
+        "affirm",
+        "goodbye",
+        "greet",
+        "restaurant_search",
+        "chitchat",
+    }
 
     clean_td = drop_intents_below_freq(td, 10)
     assert clean_td.intents == {"affirm", "restaurant_search"}
@@ -286,8 +299,8 @@ def test_intent_evaluation_report(tmpdir_factory):
     result = evaluate_intents(
         intent_results,
         report_folder,
-        successes_filename=None,
-        errors_filename=None,
+        successes=False,
+        errors=False,
         confmat_filename=None,
         intent_hist_filename=None,
     )
@@ -306,6 +319,54 @@ def test_intent_evaluation_report(tmpdir_factory):
     assert len(report.keys()) == 4
     assert report["greet"] == greet_results
     assert result["predictions"][0] == prediction
+
+
+def test_response_evaluation_report(tmpdir_factory):
+    path = tmpdir_factory.mktemp("evaluation").strpath
+    report_folder = os.path.join(path, "reports")
+    report_filename = os.path.join(report_folder, "response_selection_report.json")
+
+    rasa.utils.io.create_directory(report_folder)
+
+    response_results = [
+        ResponseSelectionEvaluationResult(
+            "chitchat",
+            "It's sunny in Berlin",
+            "It's sunny in Berlin",
+            "What's the weather",
+            0.65432,
+        ),
+        ResponseSelectionEvaluationResult(
+            "chitchat",
+            "My name is Mr.bot",
+            "My name is Mr.bot",
+            "What's your name?",
+            0.98765,
+        ),
+    ]
+
+    result = evaluate_response_selections(response_results, report_folder)
+
+    report = json.loads(rasa.utils.io.read_file(report_filename))
+
+    name_query_results = {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 1,
+    }
+
+    prediction = {
+        "text": "What's your name?",
+        "intent_target": "chitchat",
+        "response_target": "My name is Mr.bot",
+        "response_predicted": "My name is Mr.bot",
+        "confidence": 0.98765,
+    }
+
+    assert len(report.keys()) == 5
+    assert report["My name is Mr.bot"] == name_query_results
+    assert result["predictions"][1] == prediction
 
 
 def test_entity_evaluation_report(tmpdir_factory):
@@ -364,6 +425,29 @@ def test_empty_intent_removal():
     assert intent_results[0].intent_prediction == "greet"
     assert intent_results[0].confidence == 0.98765
     assert intent_results[0].message == "hello"
+
+
+def test_empty_response_removal():
+    response_results = [
+        ResponseSelectionEvaluationResult(
+            "chitchat", None, "It's sunny in Berlin", "What's the weather", 0.65432
+        ),
+        ResponseSelectionEvaluationResult(
+            "chitchat",
+            "My name is Mr.bot",
+            "My name is Mr.bot",
+            "What's your name?",
+            0.98765,
+        ),
+    ]
+    response_results = remove_empty_response_examples(response_results)
+
+    assert len(response_results) == 1
+    assert response_results[0].intent_target == "chitchat"
+    assert response_results[0].response_target == "My name is Mr.bot"
+    assert response_results[0].response_prediction == "My name is Mr.bot"
+    assert response_results[0].confidence == 0.98765
+    assert response_results[0].message == "What's your name?"
 
 
 def test_evaluate_entities_cv_empty_tokens():
@@ -523,3 +607,160 @@ def test_nlu_comparison(tmpdir):
 
     run_1_path = os.path.join(output, "run_1")
     assert set(os.listdir(run_1_path)) == {"50%_exclusion", "80%_exclusion", "test.md"}
+
+
+@pytest.mark.parametrize(
+    "entity_results,targets,predictions,successes,errors",
+    [
+        (
+            [
+                EntityEvaluationResult(
+                    entity_targets=[
+                        {
+                            "start": 17,
+                            "end": 24,
+                            "value": "Italian",
+                            "entity": "cuisine",
+                        }
+                    ],
+                    entity_predictions=[
+                        {
+                            "start": 17,
+                            "end": 24,
+                            "value": "Italian",
+                            "entity": "cuisine",
+                        }
+                    ],
+                    tokens=[
+                        "I",
+                        "want",
+                        "to",
+                        "book",
+                        "an",
+                        "Italian",
+                        "restaurant",
+                        ".",
+                    ],
+                    message="I want to book an Italian restaurant.",
+                ),
+                EntityEvaluationResult(
+                    entity_targets=[
+                        {
+                            "start": 8,
+                            "end": 15,
+                            "value": "Mexican",
+                            "entity": "cuisine",
+                        },
+                        {
+                            "start": 31,
+                            "end": 32,
+                            "value": "4",
+                            "entity": "number_people",
+                        },
+                    ],
+                    entity_predictions=[],
+                    tokens=[
+                        "Book",
+                        "an",
+                        "Mexican",
+                        "restaurant",
+                        "for",
+                        "4",
+                        "people",
+                        ".",
+                    ],
+                    message="Book an Mexican restaurant for 4 people.",
+                ),
+            ],
+            [
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                "cuisine",
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                "cuisine",
+                NO_ENTITY,
+                NO_ENTITY,
+                "number_people",
+                NO_ENTITY,
+                NO_ENTITY,
+            ],
+            [
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                "cuisine",
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+                NO_ENTITY,
+            ],
+            [
+                {
+                    "text": "I want to book an Italian restaurant.",
+                    "entities": [
+                        {
+                            "start": 17,
+                            "end": 24,
+                            "value": "Italian",
+                            "entity": "cuisine",
+                        }
+                    ],
+                    "predicted_entities": [
+                        {
+                            "start": 17,
+                            "end": 24,
+                            "value": "Italian",
+                            "entity": "cuisine",
+                        }
+                    ],
+                }
+            ],
+            [
+                {
+                    "text": "Book an Mexican restaurant for 4 people.",
+                    "entities": [
+                        {
+                            "start": 8,
+                            "end": 15,
+                            "value": "Mexican",
+                            "entity": "cuisine",
+                        },
+                        {
+                            "start": 31,
+                            "end": 32,
+                            "value": "4",
+                            "entity": "number_people",
+                        },
+                    ],
+                    "predicted_entities": [],
+                }
+            ],
+        )
+    ],
+)
+def test_collect_entity_predictions(
+    entity_results, targets, predictions, successes, errors
+):
+    actual = collect_successful_entity_predictions(entity_results, targets, predictions)
+
+    assert len(successes) == len(actual)
+    assert successes == actual
+
+    actual = collect_incorrect_entity_predictions(entity_results, targets, predictions)
+
+    assert len(errors) == len(actual)
+    assert errors == actual
