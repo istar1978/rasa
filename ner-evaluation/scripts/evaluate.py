@@ -50,6 +50,8 @@ SPACY_NER_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "SpacyEntityExtr
 
 FLAIR_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "FlairEntityExtractor"}]
 
+TF_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "ConvLstmCrfEntityExtractor"}]
+
 
 def load_training_data(
     path: Text, train_frac: float = 0.8, typo: bool = False
@@ -224,22 +226,22 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Named-Entity-Recognition Evaluation")
     parser.add_argument("data", type=str, help="path to dataset folder")
-    parser.add_argument("--output", type=str, default="results", help="output folder")
+    parser.add_argument("--output", type=str, default="local", help="output folder")
     parser.add_argument(
         "--pipeline",
         type=str,
-        choices=["default", "default-spacy", "spacy", "flair"],
-        default="default",
+        choices=["default", "default-spacy", "spacy", "flair", "tensorflow"],
+        default="tensorflow",
         help="pipeline to evaluate",
     )
     parser.add_argument("--typo", action="store_true", help="use typo dataset")
     parser.add_argument(
         "--train-frac",
         type=float,
-        default=0.8,
+        default=0.5,
         help="percentage of training datset examples",
     )
-    parser.add_argument("--runs", type=int, default=5, help="number of runs")
+    parser.add_argument("--runs", type=int, default=1, help="number of runs")
 
     args = parser.parse_args()
 
@@ -248,6 +250,7 @@ if __name__ == "__main__":
         "default-spacy": (SPACY_PIPELINE, "default_spacy_pipeline"),
         "spacy": (SPACY_NER_PIPELINE, "spacy_pipeline"),
         "flair": (FLAIR_PIPELINE, "flair_pipeline"),
+        "tensorflow": (TF_PIPELINE, "tf_pipeline"),
     }
 
     pipeline = pipelines[args.pipeline][0]

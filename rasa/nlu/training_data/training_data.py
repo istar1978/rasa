@@ -114,9 +114,9 @@ class TrainingData(object):
         removes trailing whitespaces from intent annotations."""
 
         for ex in examples:
-            if ex.get("intent"):
+            if ex.get("intent") and ex.get("intent") is not None:
                 ex.set("intent", ex.get("intent").strip())
-            if ex.get("response"):
+            if ex.get("response") and ex.get("response") is not None:
                 ex.set("response", ex.get("response").strip())
         return examples
 

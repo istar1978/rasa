@@ -1,5 +1,6 @@
 # coding=utf-8
 import responses
+from nlu.extractors.conv_lstm_crf_entity_extractor import ConvLstmCrfEntityExtractor
 
 from rasa.nlu.config import RasaNLUModelConfig
 from rasa.nlu.training_data import TrainingData, Message
@@ -530,3 +531,47 @@ def test_spacy_ner_extractor(component_builder, spacy_nlp):
         "entity": "PERSON",
         "confidence": None,
     }
+
+
+def test_create_vocab():
+
+    examples = [
+        Message(
+            "anywhere in the west",
+            {
+                "tokens": ["anywhere", "in", "the", "west"],
+                "entities": [
+                    {"start": 16, "end": 20, "value": "west", "entity": "location"}
+                ],
+            },
+        ),
+        Message(
+            "central indian restaurant in the west",
+            {
+                "tokens": ["central", "indian", "restaurant", "in", "the", "west"],
+                "entities": [
+                    {
+                        "start": 0,
+                        "end": 7,
+                        "value": "central",
+                        "entity": "location",
+                        "extractor": "random_extractor",
+                    },
+                    {
+                        "start": 8,
+                        "end": 14,
+                        "value": "indian",
+                        "entity": "cuisine",
+                        "extractor": "CRFEntityExtractor",
+                    },
+                ],
+            },
+        ),
+    ]
+
+    extractor = ConvLstmCrfEntityExtractor()
+    extractor._create_vocab(TrainingData(examples))
+
+    assert len(extractor.words) == 7
+    assert len(extractor.chars) == 15
+    assert len(extractor.tags) == 2
