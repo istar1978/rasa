@@ -608,9 +608,11 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
 
             session.run(tf.global_variables_initializer())
             session.run(tf.local_variables_initializer())
-            session.run(tf.tables_initializer())
 
             saver = tf.train.import_meta_graph(checkpoint + ".meta")
+
+            session.run(tf.tables_initializer())
+
             saver.restore(session, checkpoint)
 
             chars = train_utils.load_tensor("chars")
