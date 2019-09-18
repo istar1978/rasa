@@ -8,8 +8,8 @@ import logging
 import typing
 from typing import Any, Dict, List, Optional, Text, Type
 
-from rasa.nlu.extractors.conv_lstm_crf_entity_extractor import (
-    ConvLstmCrfEntityExtractor,
+from rasa.nlu.extractors.tensorflow_crf_entity_extractor import (
+    TensorflowCrfEntityExtractor,
 )
 from rasa.nlu.classifiers.embedding_intent_classifier import EmbeddingIntentClassifier
 from rasa.nlu.classifiers.keyword_intent_classifier import KeywordIntentClassifier
@@ -62,7 +62,7 @@ component_classes = [
     DucklingHTTPExtractor,
     EntitySynonymMapper,
     FlairEntityExtractor,
-    ConvLstmCrfEntityExtractor,
+    TensorflowCrfEntityExtractor,
     # featurizers
     SpacyFeaturizer,
     MitieFeaturizer,

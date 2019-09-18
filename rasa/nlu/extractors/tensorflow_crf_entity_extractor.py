@@ -1,9 +1,9 @@
 import copy
-import datetime
 import functools
 import logging
 import os
 import pickle
+import random
 import warnings
 
 import tensorflow as tf
@@ -21,9 +21,11 @@ from rasa.nlu.training_data import Message, TrainingData
 from rasa.nlu.tokenizers import Token
 import rasa.utils.train_utils as train_utils
 import rasa.utils.io as io_utils
+import rasa.utils.common as common_utils
 import rasa.core.utils
 
 from tf_metrics import precision, recall, f1
+from tqdm import tqdm
 
 try:
     import spacy
@@ -33,7 +35,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class ConvLstmCrfEntityExtractor(EntityExtractor):
+class TensorflowCrfEntityExtractor(EntityExtractor):
 
     provides = ["entities"]
 
@@ -49,18 +51,22 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         "dropout": 0.5,
         # number of out of vocabulary buckets
         "num_oov_buckets": 1,
-        #
+        # see https://www.tensorflow.org/api_docs/python/tf/compat/v2/data/Dataset#shuffle
         "buffer": 15000,
-        #
+        # the number of filters in the convolution
         "filters": 50,
         # kernel size of conv
         "kernel_size": 3,
         # batch siye
         "batch_size": 20,
         # number of epochs
-        "epochs": 1,
-        #
+        "epochs": 25,
+        # the number of units in the LSTM cell
         "lstm_size": 20,
+        # how often calculate validation metrics
+        "evaluate_every_num_epochs": 5,  # small values may hurt performance
+        # how many examples to use for hold out validation set
+        "evaluate_on_num_examples": 0,  # large values may hurt performance
     }
     # end default properties (DOC MARKER - don't remove)
 
@@ -69,10 +75,6 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         component_config: Optional[Dict[Text, Any]] = None,
         session: Optional[tf.Session] = None,
         graph: Optional[tf.Graph] = None,
-        vocab_words: Optional[tf.Tensor] = None,
-        vocab_chars: Optional[tf.Tensor] = None,
-        vocab_tags: Optional[tf.Tensor] = None,
-        reverse_vocab_tags: Optional[tf.Tensor] = None,
         indices: Optional[List[int]] = None,
         num_tags: Optional[int] = None,
         num_chars: Optional[int] = None,
@@ -80,7 +82,7 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         nchars: Optional[tf.placeholder] = None,
         words: Optional[tf.placeholder] = None,
         nwords: Optional[tf.placeholder] = None,
-        pred_ids: Optional[tf.Tensor] = None,
+        predictions: Optional[tf.Tensor] = None,
     ) -> None:
 
         self._load_params(component_config)
@@ -89,13 +91,15 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         self.graph = graph
 
         # vocabulary - created during training
-        self.vocab_words = vocab_words
-        self.vocab_chars = vocab_chars
-        self.vocab_tags = vocab_tags
-        self.reverse_vocab_tags = reverse_vocab_tags
         self.indices = indices
         self.num_tags = num_tags
         self.num_chars = num_chars
+
+        # lookup tables
+        self.vocab_tags = None
+        self.reverse_vocab_tags = None
+        self.vocab_words = None
+        self.vocab_chars = None
 
         # feautes
         self.chars = chars
@@ -104,9 +108,9 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         self.nwords = nwords
 
         # input for predictions
-        self.pred_ids = pred_ids
+        self.predictions = predictions
 
-        super(ConvLstmCrfEntityExtractor, self).__init__(component_config)
+        super(TensorflowCrfEntityExtractor, self).__init__(component_config)
 
     def _load_params(self, component_config: Optional[Dict[Text, Any]]) -> None:
         config = copy.deepcopy(self.defaults)
@@ -121,7 +125,9 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         with self.graph.as_default():
             self._create_vocab(training_data)
 
-            train_dataset = self._create_dataset(training_data.training_examples)
+            train_dataset, eval_dataset = self._create_datasets(
+                training_data.training_examples
+            )
 
             iterator = tf.data.Iterator.from_structure(
                 train_dataset.output_types,
@@ -129,13 +135,17 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
                 output_classes=train_dataset.output_classes,
             )
             train_init_op = iterator.make_initializer(train_dataset)
+            if eval_dataset:
+                eval_init_op = iterator.make_initializer(eval_dataset)
+            else:
+                eval_init_op = None
 
             self.session = tf.Session()
 
             loss, metrics = self._build_train_graph(iterator)
             train_op = tf.train.AdamOptimizer().minimize(loss)
 
-            self._train_model(train_init_op, train_op, loss, metrics)
+            self._train_model(train_init_op, eval_init_op, train_op, loss, metrics)
 
             self._build_prediction_graph()
 
@@ -144,12 +154,8 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
             features, _ = self._convert_message(message)
             (words, nwords), (chars, nchars) = features
 
-            self.session.run(tf.global_variables_initializer())
-            self.session.run(tf.local_variables_initializer())
-            # self.session.run(tf.tables_initializer())
-
             output = self.session.run(
-                self.pred_ids,
+                self.predictions,
                 feed_dict={
                     self.words: [words],
                     self.nwords: [nwords],
@@ -159,17 +165,12 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
             )
 
             # Predictions
-            reverse_vocab_tags = self.reverse_vocab_tags
-            pred_strings = reverse_vocab_tags.lookup(tf.to_int64(output))
-            predictions = {"pred_ids": output, "tags": pred_strings}
-            tags = predictions["tags"][0].eval(session=self.session)
-
+            tags = output[0][0]
             entities = self._convert_tags_to_entities(
                 message.text, message.get("tokens", []), tags
             )
 
             extracted = self.add_extractor_name(entities)
-
             message.set(
                 "entities", message.get("entities", []) + extracted, add_to_output=True
             )
@@ -256,9 +257,16 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         for example in data:
             yield self._convert_message(example)
 
-    def _create_dataset(
+    def _split_data(self, data):
+        eval_count = self.params["evaluate_on_num_examples"]
+        if eval_count > 0:
+            random.shuffle(data)
+            return data[0:eval_count], data[eval_count:]
+        return [], data
+
+    def _create_datasets(
         self, data: List[Message], shuffle_and_repeat: bool = True
-    ) -> tf.data.Dataset:
+    ) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
         params = self.params if self.params is not None else {}
 
         shapes = (
@@ -271,6 +279,24 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         types = (((tf.string, tf.int32), (tf.string, tf.int32)), tf.string)
         defaults = ((("<pad>", 0), ("<pad>", 0)), "O")
 
+        eval_data, train_data = self._split_data(data)
+
+        train_dataset = self._create_dataset(
+            data, defaults, params, shapes, shuffle_and_repeat, types
+        )
+
+        if eval_data:
+            eval_dataset = self._create_dataset(
+                data, defaults, params, shapes, shuffle_and_repeat, types
+            )
+        else:
+            eval_dataset = None
+
+        return train_dataset, eval_dataset
+
+    def _create_dataset(
+        self, data, defaults, params, shapes, shuffle_and_repeat, types
+    ):
         dataset = tf.data.Dataset.from_generator(
             functools.partial(self._convert_messages, data),
             output_shapes=shapes,
@@ -280,11 +306,9 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         if shuffle_and_repeat:
             dataset = dataset.shuffle(params["buffer"]).repeat(params["epochs"])
 
-        dataset = dataset.padded_batch(
-            params.get("batch_size", params["batch_size"]), shapes, defaults
+        return dataset.padded_batch(
+            params.get("batch_size", 20), shapes, defaults
         ).prefetch(1)
-
-        return dataset
 
     def _build_train_graph(
         self, iterator: tf.data.Iterator, training: bool = True
@@ -322,6 +346,27 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
             tf.summary.scalar(metric_name, op[1])
 
         return loss, metrics
+
+    def _build_prediction_graph(self):
+        self.words = tf.placeholder(dtype=tf.string, shape=(None, None))
+        self.nwords = tf.placeholder(dtype=tf.int32, shape=(None))
+        self.chars = tf.placeholder(dtype=tf.string, shape=(None, None, None))
+        self.nchars = tf.placeholder(dtype=tf.int32, shape=(None, None))
+
+        # Read vocabs and inputs
+        embeddings = self._featurization(training=False)
+
+        # LSTM
+        output = self._create_lstm(embeddings, training=False)
+        # CRF
+        _, _, pred_ids = self._create_crf(output)
+
+        # get predictions
+        reverse_vocab_tags = self.reverse_vocab_tags
+        self.predictions = reverse_vocab_tags.lookup(tf.to_int64(output))
+
+        self.session.run(tf.global_variables_initializer())
+        self.session.run(tf.local_variables_initializer())
 
     def _create_crf(
         self, output_lstm: tf.Tensor
@@ -397,25 +442,6 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
 
             return embeddings
 
-    def _build_prediction_graph(self):
-        # Read vocabs and inputs
-
-        self.words = tf.placeholder(dtype=tf.string, shape=(None, None))
-        self.nwords = tf.placeholder(dtype=tf.int32, shape=(None))
-        self.chars = tf.placeholder(dtype=tf.string, shape=(None, None, None))
-        self.nchars = tf.placeholder(dtype=tf.int32, shape=(None, None))
-
-        # Read vocabs and inputs
-        embeddings = self._featurization(training=False)
-
-        # LSTM
-        output = self._create_lstm(embeddings, training=False)
-        # CRF
-        _, _, self.pred_ids = self._create_crf(output)
-
-        self.session.run(tf.global_variables_initializer())
-        self.session.run(tf.local_variables_initializer())
-
     def _masked_conv1d_and_max(
         self, tensor: tf.Tensor, weights: tf.Tensor, filters: int, kernel_size: int
     ) -> tf.Tensor:
@@ -463,6 +489,7 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
     def _train_model(
         self,
         train_init_op: tf.Tensor,
+        eval_init_op: tf.Tensor,
         train_op: tf.Tensor,
         loss: float,
         metrics: Dict[Text, Any],
@@ -471,43 +498,92 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         self.session.run(tf.local_variables_initializer())
         self.session.run(tf.tables_initializer())
 
-        for epoch in range(self.params["epochs"]):
-            print ("-" * 100)
-            print ("{} - Starting epoch {}".format(datetime.datetime.now(), epoch))
+        pbar = tqdm(
+            range(self.params["epochs"]),
+            desc="Epochs",
+            disable=common_utils.is_logging_disabled(),
+        )
 
-            self.session.run(train_init_op)
+        train_loss = 0
+        train_acc = 0
+        eval_loss = 0
+        eval_acc = 0
 
-            batch = 0
-            batch_loss = 0
-            batch_acc = 0
-            batch_f1 = 0
-            while True:
-                try:
-                    _, train_loss, train_metrics = self.session.run(
-                        [train_op, loss, metrics]
-                    )
-                except tf.errors.OutOfRangeError:
-                    break
-
-                if batch % 500 == 0:
-                    print (
-                        "{} - Processed batch {} - Loss: {}".format(
-                            datetime.datetime.now(), batch, train_loss
-                        )
-                    )
-                batch += 1
-                batch_loss += train_loss
-                batch_acc += train_metrics["acc"][0]
-                batch_f1 += train_metrics["f1"][0]
-
-            print (
-                "{} - Done processing epoch {} (batches {})".format(
-                    datetime.datetime.now(), epoch, batch
-                )
+        for epoch in pbar:
+            train_acc, train_f1, train_loss = self._process_data(
+                train_init_op, train_op, loss, metrics
             )
-            print ("Train loss: {}".format(batch_loss / batch))
-            print ("Train accuracy: {}".format(batch_acc / batch))
-            print ("Train f1-score: {}".format(batch_f1 / batch))
+
+            postfix_dict = {
+                "loss": "{:.3f}".format(train_loss),
+                "acc": "{:.3f}".format(train_acc),
+                "f1": "{:.3f}".format(train_f1),
+            }
+
+            if eval_init_op is not None:
+                if (epoch + 1) % self.params["evaluate_every_num_epochs"] == 0 or (
+                    epoch + 1
+                ) == self.params["epochs"]:
+
+                    eval_acc, eval_f1, eval_loss = self._process_data(
+                        eval_init_op, None, loss, metrics
+                    )
+
+                    postfix_dict.update(
+                        {
+                            "val_loss": "{:.3f}".format(eval_loss),
+                            "val_acc": "{:.3f}".format(eval_acc),
+                            "val_f1": "{:.3f}".format(eval_f1),
+                        }
+                    )
+
+            pbar.set_postfix(postfix_dict)
+
+        final_message = (
+            "Finished training TF CRF, "
+            "train loss={:.3f}, train accuracy={:.3f}"
+            "".format(train_loss, train_acc)
+        )
+        if eval_init_op is not None:
+            final_message += (
+                ", validation loss={:.3f}, validation accuracy={:.3f}"
+                "".format(eval_loss, eval_acc)
+            )
+        logger.info(final_message)
+
+    def _process_data(
+        self,
+        init_op: tf.Tensor,
+        init_run: Optional[tf.Tensor],
+        loss: float,
+        metrics: Dict[Text, Any],
+    ):
+        steps = 0
+        batch_loss = 0
+        batch_acc = 0
+        batch_f1 = 0
+
+        self.session.run(init_op)
+
+        while True:
+            try:
+                if init_run:
+                    _, _loss, _metrics = self.session.run([init_run, loss, metrics])
+                else:
+                    _loss, _metrics = self.session.run([loss, metrics])
+            except tf.errors.OutOfRangeError:
+                break
+
+            steps += 1
+            batch_loss += _loss
+            batch_acc += _metrics["acc"][0]
+            batch_f1 += _metrics["f1"][0]
+
+        batch_loss = batch_loss / steps
+        batch_acc = batch_acc / steps
+        batch_f1 = batch_f1 / steps
+
+        return batch_acc, batch_f1, batch_loss
 
     @classmethod
     def load(
@@ -515,9 +591,9 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         meta: Dict[Text, Any],
         model_dir: Text = None,
         model_metadata: Metadata = None,
-        cached_component: Optional["ConvLstmCrfEntityExtractor"] = None,
+        cached_component: Optional["TensorflowCrfEntityExtractor"] = None,
         **kwargs: Any
-    ) -> "ConvLstmCrfEntityExtractor":
+    ) -> "TensorflowCrfEntityExtractor":
         if not os.path.exists(model_dir):
             raise Exception(
                 "Failed to load entity extractor model. Path '{}' "
@@ -534,27 +610,22 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         with graph.as_default():
             session = tf.Session()
             saver = tf.train.import_meta_graph(checkpoint + ".meta")
-
             saver.restore(session, checkpoint)
 
-            vocab_words = train_utils.load_tensor("vocab_words")
-            vocab_chars = train_utils.load_tensor("vocab_chars")
-            vocab_tags = train_utils.load_tensor("vocab_tags")
-            reverse_vocab_tags = train_utils.load_tensor("reverse_vocab_tags")
+            session.run(tf.global_variables_initializer())
+            session.run(tf.local_variables_initializer())
+            session.run(tf.tables_initializer())
+
             chars = train_utils.load_tensor("chars")
             nchars = train_utils.load_tensor("nchars")
             words = train_utils.load_tensor("words")
             nwords = train_utils.load_tensor("nwords")
-            pred_ids = train_utils.load_tensor("pred_ids")
+            predictions = train_utils.load_tensor("predictions")
 
         return cls(
             graph=graph,
             session=session,
             component_config=meta,
-            vocab_words=vocab_words,
-            vocab_tags=vocab_tags,
-            vocab_chars=vocab_chars,
-            reverse_vocab_tags=reverse_vocab_tags,
             num_chars=params["num_chars"],
             num_tags=params["num_tags"],
             indices=params["indices"],
@@ -562,7 +633,7 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
             nwords=nwords,
             chars=chars,
             nchars=nchars,
-            pred_ids=pred_ids,
+            predictions=predictions,
         )
 
     def persist(self, file_name: Text, model_dir: Text) -> Optional[Dict[Text, Any]]:
@@ -591,17 +662,11 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         io_utils.create_directory_for_file(checkpoint)
 
         with self.graph.as_default():
-            train_utils.persist_tensor("vocab_words", self.vocab_words, self.graph)
-            train_utils.persist_tensor("vocab_chars", self.vocab_chars, self.graph)
-            train_utils.persist_tensor("vocab_tags", self.vocab_tags, self.graph)
-            train_utils.persist_tensor(
-                "reverse_vocab_tags", self.reverse_vocab_tags, self.graph
-            )
             train_utils.persist_tensor("chars", self.chars, self.graph)
             train_utils.persist_tensor("nchars", self.nchars, self.graph)
             train_utils.persist_tensor("words", self.words, self.graph)
             train_utils.persist_tensor("nwords", self.nwords, self.graph)
-            train_utils.persist_tensor("pred_ids", self.pred_ids, self.graph)
+            train_utils.persist_tensor("predictions", self.predictions, self.graph)
 
             saver = tf.train.Saver()
             saver.save(self.session, checkpoint)

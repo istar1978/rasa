@@ -50,7 +50,10 @@ SPACY_NER_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "SpacyEntityExtr
 
 FLAIR_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "FlairEntityExtractor"}]
 
-TF_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "ConvLstmCrfEntityExtractor"}]
+TF_PIPELINE = [
+    {"name": "WhitespaceTokenizer"},
+    {"name": "TensorflowCrfEntityExtractor"},
+]
 
 
 def load_training_data(

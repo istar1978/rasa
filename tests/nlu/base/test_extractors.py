@@ -1,6 +1,6 @@
 # coding=utf-8
 import responses
-from nlu.extractors.conv_lstm_crf_entity_extractor import ConvLstmCrfEntityExtractor
+from nlu.extractors.tensorflow_crf_entity_extractor import TensorflowCrfEntityExtractor
 
 from rasa.nlu.config import RasaNLUModelConfig
 from rasa.nlu.training_data import TrainingData, Message
@@ -569,7 +569,7 @@ def test_create_vocab():
         ),
     ]
 
-    extractor = ConvLstmCrfEntityExtractor()
+    extractor = TensorflowCrfEntityExtractor()
     extractor._create_vocab(TrainingData(examples))
 
     assert len(extractor.words) == 7
