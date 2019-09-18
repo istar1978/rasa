@@ -178,7 +178,8 @@ def run(
     typo: bool,
     output_folder: Text,
 ):
-    set_log_level(30)
+    set_log_level(10)
+
     print (
         "Evaluating pipeline '{}' on dataset '{}' (typo: {}, train_frac: {}, runs: {}).".format(
             pipeline_name, data_path, typo, train_frac, runs

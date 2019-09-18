@@ -43,6 +43,8 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
 
     # default properties (DOC MARKER - don't remove)
     defaults = {
+        # file to word embeddings in numpy format
+        "word_embeddings_file": "/Users/tabergma/Repositories/tf_ner/data/example/WNUT17/glove.npz",
         # dimension of char embeddings
         "dim_chars": 100,
         # dimension of word embeddings
@@ -60,7 +62,7 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
         # batch siye
         "batch_size": 20,
         # number of epochs
-        "epochs": 25,
+        "epochs": 5,
         # the number of units in the LSTM cell
         "lstm_size": 20,
         # how often calculate validation metrics
@@ -145,9 +147,9 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
             loss, metrics = self._build_train_graph(iterator)
             train_op = tf.train.AdamOptimizer().minimize(loss)
 
-            self._train_model(train_init_op, eval_init_op, train_op, loss, metrics)
-
             self._build_prediction_graph()
+
+            self._train_model(train_init_op, eval_init_op, train_op, loss, metrics)
 
     def process(self, message: Message, **kwargs: Any) -> None:
         with self.graph.as_default():
@@ -165,7 +167,7 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
             )
 
             # Predictions
-            tags = output[0][0]
+            tags = output[0]
             entities = self._convert_tags_to_entities(
                 message.text, message.get("tokens", []), tags
             )
@@ -321,9 +323,9 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
         embeddings = self._featurization(dropout, training)
 
         # LSTM
-        output_lstm = self._create_lstm(embeddings, dropout, training)
+        lstm_output = self._create_lstm(embeddings, dropout, training)
         # CRF
-        logits, crf_params, pred_ids = self._create_crf(output_lstm)
+        logits, crf_params, pred_ids = self._create_crf(lstm_output)
 
         # Loss
         tags = self.vocab_tags.lookup(labels)
@@ -357,16 +359,12 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
         embeddings = self._featurization(training=False)
 
         # LSTM
-        output = self._create_lstm(embeddings, training=False)
+        lstm_output = self._create_lstm(embeddings, training=False)
         # CRF
-        _, _, pred_ids = self._create_crf(output)
+        _, _, pred_ids = self._create_crf(lstm_output)
 
         # get predictions
-        reverse_vocab_tags = self.reverse_vocab_tags
-        self.predictions = reverse_vocab_tags.lookup(tf.to_int64(output))
-
-        self.session.run(tf.global_variables_initializer())
-        self.session.run(tf.local_variables_initializer())
+        self.predictions = self.reverse_vocab_tags.lookup(tf.to_int64(pred_ids))
 
     def _create_crf(
         self, output_lstm: tf.Tensor
@@ -427,12 +425,10 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
 
             # Word Embeddings
             word_ids = self.vocab_words.lookup(self.words)
-            glove = np.load(
-                "/Users/tabergma/Repositories/tf_ner/data/example/WNUT17/glove.npz"
-            )[
+            loaded_word_embeddings = np.load(self.params["word_embeddings_file"])[
                 "embeddings"
             ]  # np.array
-            variable = np.vstack([glove, [[0.0] * self.params["dim"]]])
+            variable = np.vstack([loaded_word_embeddings, [[0.0] * self.params["dim"]]])
             variable = tf.Variable(variable, dtype=tf.float32, trainable=False)
             word_embeddings = tf.nn.embedding_lookup(variable, word_ids)
 
@@ -540,7 +536,7 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
             pbar.set_postfix(postfix_dict)
 
         final_message = (
-            "Finished training TF CRF, "
+            "Finished training TensorflowCrfEntityExtractor, "
             "train loss={:.3f}, train accuracy={:.3f}"
             "".format(train_loss, train_acc)
         )
@@ -609,12 +605,13 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
         graph = tf.Graph()
         with graph.as_default():
             session = tf.Session()
-            saver = tf.train.import_meta_graph(checkpoint + ".meta")
-            saver.restore(session, checkpoint)
 
             session.run(tf.global_variables_initializer())
             session.run(tf.local_variables_initializer())
             session.run(tf.tables_initializer())
+
+            saver = tf.train.import_meta_graph(checkpoint + ".meta")
+            saver.restore(session, checkpoint)
 
             chars = train_utils.load_tensor("chars")
             nchars = train_utils.load_tensor("nchars")
