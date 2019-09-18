@@ -7,10 +7,9 @@ import pickle
 import warnings
 
 import tensorflow as tf
-from typing import Any, Dict, Optional, Text, List
+from typing import Any, Dict, Optional, Text, List, Tuple
 
 from jsonpickle import json
-from nlu.tokenizers import Token
 from six.moves import reduce
 import numpy as np
 
@@ -19,6 +18,7 @@ from rasa.nlu.config import RasaNLUModelConfig
 from rasa.nlu.extractors import EntityExtractor
 from rasa.nlu.model import Metadata
 from rasa.nlu.training_data import Message, TrainingData
+from rasa.nlu.tokenizers import Token
 import rasa.utils.train_utils as train_utils
 import rasa.utils.io as io_utils
 import rasa.core.utils
@@ -58,7 +58,7 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         # batch siye
         "batch_size": 20,
         # number of epochs
-        "epochs": 5,
+        "epochs": 1,
         #
         "lstm_size": 20,
     }
@@ -67,18 +67,20 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
     def __init__(
         self,
         component_config: Optional[Dict[Text, Any]] = None,
-        session: tf.Session = None,
-        graph: tf.Graph = None,
-        vocab_words: tf.Tensor = None,
-        vocab_chars: tf.Tensor = None,
-        vocab_tags: tf.Tensor = None,
-        indices: List[int] = None,
-        num_tags: int = None,
-        num_chars: int = None,
-        chars: tf.placeholder = None,
-        nchars: tf.placeholder = None,
-        words: tf.placeholder = None,
-        nwords: tf.placeholder = None,
+        session: Optional[tf.Session] = None,
+        graph: Optional[tf.Graph] = None,
+        vocab_words: Optional[tf.Tensor] = None,
+        vocab_chars: Optional[tf.Tensor] = None,
+        vocab_tags: Optional[tf.Tensor] = None,
+        reverse_vocab_tags: Optional[tf.Tensor] = None,
+        indices: Optional[List[int]] = None,
+        num_tags: Optional[int] = None,
+        num_chars: Optional[int] = None,
+        chars: Optional[tf.placeholder] = None,
+        nchars: Optional[tf.placeholder] = None,
+        words: Optional[tf.placeholder] = None,
+        nwords: Optional[tf.placeholder] = None,
+        pred_ids: Optional[tf.Tensor] = None,
     ) -> None:
 
         self._load_params(component_config)
@@ -90,6 +92,7 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         self.vocab_words = vocab_words
         self.vocab_chars = vocab_chars
         self.vocab_tags = vocab_tags
+        self.reverse_vocab_tags = reverse_vocab_tags
         self.indices = indices
         self.num_tags = num_tags
         self.num_chars = num_chars
@@ -101,7 +104,7 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         self.nwords = nwords
 
         # input for predictions
-        self.predictions = None
+        self.pred_ids = pred_ids
 
         super(ConvLstmCrfEntityExtractor, self).__init__(component_config)
 
@@ -134,7 +137,7 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
 
             self._train_model(train_init_op, train_op, loss, metrics)
 
-            self.predictions = self._build_prediction_graph()
+            self._build_prediction_graph()
 
     def process(self, message: Message, **kwargs: Any) -> None:
         with self.graph.as_default():
@@ -143,9 +146,10 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
 
             self.session.run(tf.global_variables_initializer())
             self.session.run(tf.local_variables_initializer())
+            # self.session.run(tf.tables_initializer())
 
             output = self.session.run(
-                self.predictions,
+                self.pred_ids,
                 feed_dict={
                     self.words: [words],
                     self.nwords: [nwords],
@@ -154,7 +158,12 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
                 },
             )
 
-            tags = output["tags"][0]
+            # Predictions
+            reverse_vocab_tags = self.reverse_vocab_tags
+            pred_strings = reverse_vocab_tags.lookup(tf.to_int64(output))
+            predictions = {"pred_ids": output, "tags": pred_strings}
+            tags = predictions["tags"][0].eval(session=self.session)
+
             entities = self._convert_tags_to_entities(
                 message.text, message.get("tokens", []), tags
             )
@@ -167,7 +176,7 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
 
     def _convert_tags_to_entities(
         self, text: str, tokens: List[Token], tags: List[bytes]
-    ):
+    ) -> List[Dict[Text, Any]]:
         entities = []
         last_tag = "O"
         for token, tag in zip(tokens, tags):
@@ -223,7 +232,11 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         self.num_tags = len(self.indices) + 1
         self.num_chars = len(chars) + self.params["num_oov_buckets"]
 
-    def _convert_message(self, data: Message):
+    def _convert_message(
+        self, data: Message
+    ) -> Tuple[
+        Tuple[Tuple[List[Text], int], Tuple[List[List[bytes]], List[int]]], List[bytes]
+    ]:
         tokens = data.get("tokens", [])
         entities = data.get("entities", [])
 
@@ -243,7 +256,9 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         for example in data:
             yield self._convert_message(example)
 
-    def _create_dataset(self, data: List[Message], shuffle_and_repeat: bool = True):
+    def _create_dataset(
+        self, data: List[Message], shuffle_and_repeat: bool = True
+    ) -> tf.data.Dataset:
         params = self.params if self.params is not None else {}
 
         shapes = (
@@ -271,19 +286,20 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
 
         return dataset
 
-    def _build_train_graph(self, iterator, training: bool = True):
+    def _build_train_graph(
+        self, iterator: tf.data.Iterator, training: bool = True
+    ) -> Tuple[float, Dict[Text, Any]]:
         dropout = self.params["dropout"]
 
         features, labels = iterator.get_next()
         (self.words, self.nwords), (self.chars, self.nchars) = features
 
-        # Read vocabs and inputs
         embeddings = self._featurization(dropout, training)
 
         # LSTM
-        output = self._create_lstm(embeddings, dropout, training)
+        output_lstm = self._create_lstm(embeddings, dropout, training)
         # CRF
-        logits, crf_params, pred_ids = self._create_crf(output)
+        logits, crf_params, pred_ids = self._create_crf(output_lstm)
 
         # Loss
         tags = self.vocab_tags.lookup(labels)
@@ -307,18 +323,23 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
 
         return loss, metrics
 
-    def _create_crf(self, output):
-        # CRF
+    def _create_crf(
+        self, output_lstm: tf.Tensor
+    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
-            logits = tf.layers.dense(output, self.num_tags, name="crf-logits")
+            logits = tf.layers.dense(output_lstm, self.num_tags, name="crf-logits")
             crf_params = tf.get_variable(
                 "crf-params", [self.num_tags, self.num_tags], dtype=tf.float32
             )
             pred_ids, _ = tf.contrib.crf.crf_decode(logits, crf_params, self.nwords)
             return logits, crf_params, pred_ids
 
-    def _create_lstm(self, embeddings, dropout, training):
-        # LSTM
+    def _create_lstm(
+        self,
+        embeddings: tf.Tensor,
+        dropout: Optional[float] = None,
+        training: bool = True,
+    ) -> tf.Tensor:
         t = tf.transpose(embeddings, perm=[1, 0, 2])  # Need time-major
         lstm_cell_fw = tf.contrib.rnn.LSTMBlockFusedCell(
             self.params["lstm_size"], reuse=tf.AUTO_REUSE
@@ -334,7 +355,9 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         output = tf.layers.dropout(output, rate=dropout, training=training)
         return output
 
-    def _featurization(self, dropout: Optional[float] = None, training: bool = True):
+    def _featurization(
+        self, dropout: Optional[float] = None, training: bool = True
+    ) -> tf.Tensor:
         with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
             # Char Embeddings
             char_ids = self.vocab_chars.lookup(self.chars)
@@ -386,43 +409,33 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         embeddings = self._featurization(training=False)
 
         # LSTM
-        output = self._create_lstm(embeddings, None, False)
+        output = self._create_lstm(embeddings, training=False)
         # CRF
-        _, _, pred_ids = self._create_crf(output)
+        _, _, self.pred_ids = self._create_crf(output)
 
-        # Predictions
-        reverse_vocab_tags = self.reverse_vocab_tags
-        pred_strings = reverse_vocab_tags.lookup(tf.to_int64(pred_ids))
-        predictions = {"pred_ids": pred_ids, "tags": pred_strings}
+        self.session.run(tf.global_variables_initializer())
+        self.session.run(tf.local_variables_initializer())
 
-        return predictions
+    def _masked_conv1d_and_max(
+        self, tensor: tf.Tensor, weights: tf.Tensor, filters: int, kernel_size: int
+    ) -> tf.Tensor:
+        """
+        Applies 1d convolution and a masked max-pooling.
 
-    def _masked_conv1d_and_max(self, t, weights, filters, kernel_size):
-        """Applies 1d convolution and a masked max-pooling
+        Args:
+            tensor: A tensor with at least 3 dimensions [d1, d2, ..., dn-1, dn]
+            weights: A Tensor of shape [d1, d2, dn-1]
+            filters: number of filters
+            kernel_size: kernel size for the temporal convolution
 
-        Parameters
-        ----------
-        t : tf.Tensor
-            A tensor with at least 3 dimensions [d1, d2, ..., dn-1, dn]
-        weights : tf.Tensor of tf.bool
-            A Tensor of shape [d1, d2, dn-1]
-        filters : int
-            number of filters
-        kernel_size : int
-            kernel size for the temporal convolution
-
-        Returns
-        -------
-        tf.Tensor
-            A tensor of shape [d1, d2, dn-1, filters]
-
+        Returns: A tensor of shape [d1, d2, dn-1, filters]
         """
         # Get shape and parameters
-        shape = tf.shape(t)
-        ndims = t.shape.ndims
+        shape = tf.shape(tensor)
+        ndims = tensor.shape.ndims
         dim1 = reduce(lambda x, y: x * y, [shape[i] for i in range(ndims - 2)])
         dim2 = shape[-2]
-        dim3 = t.shape[-1]
+        dim3 = tensor.shape[-1]
 
         # Reshape weights
         weights = tf.reshape(weights, shape=[dim1, dim2, 1])
@@ -430,11 +443,11 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
 
         # Reshape input and apply weights
         flat_shape = [dim1, dim2, dim3]
-        t = tf.reshape(t, shape=flat_shape)
-        t *= weights
+        tensor = tf.reshape(tensor, shape=flat_shape)
+        tensor *= weights
 
         # Apply convolution
-        t_conv = tf.layers.conv1d(t, filters, kernel_size, padding="same")
+        t_conv = tf.layers.conv1d(tensor, filters, kernel_size, padding="same")
         t_conv *= weights
 
         # Reduce max -- set to zero if all padded
@@ -447,14 +460,19 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
 
         return t_max
 
-    def _train_model(self, train_init_op, train_op, loss, metrics):
-
+    def _train_model(
+        self,
+        train_init_op: tf.Tensor,
+        train_op: tf.Tensor,
+        loss: float,
+        metrics: Dict[Text, Any],
+    ):
         self.session.run(tf.global_variables_initializer())
         self.session.run(tf.local_variables_initializer())
         self.session.run(tf.tables_initializer())
 
         for epoch in range(self.params["epochs"]):
-            print ("-" * 200)
+            print ("-" * 100)
             print ("{} - Starting epoch {}".format(datetime.datetime.now(), epoch))
 
             self.session.run(train_init_op)
@@ -500,11 +518,6 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
         cached_component: Optional["ConvLstmCrfEntityExtractor"] = None,
         **kwargs: Any
     ) -> "ConvLstmCrfEntityExtractor":
-        """Loads a policy from the storage.
-
-        **Needs to load its featurizer**
-        """
-
         if not os.path.exists(model_dir):
             raise Exception(
                 "Failed to load entity extractor model. Path '{}' "
@@ -527,6 +540,12 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
             vocab_words = train_utils.load_tensor("vocab_words")
             vocab_chars = train_utils.load_tensor("vocab_chars")
             vocab_tags = train_utils.load_tensor("vocab_tags")
+            reverse_vocab_tags = train_utils.load_tensor("reverse_vocab_tags")
+            chars = train_utils.load_tensor("chars")
+            nchars = train_utils.load_tensor("nchars")
+            words = train_utils.load_tensor("words")
+            nwords = train_utils.load_tensor("nwords")
+            pred_ids = train_utils.load_tensor("pred_ids")
 
         return cls(
             graph=graph,
@@ -535,9 +554,15 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
             vocab_words=vocab_words,
             vocab_tags=vocab_tags,
             vocab_chars=vocab_chars,
+            reverse_vocab_tags=reverse_vocab_tags,
             num_chars=params["num_chars"],
             num_tags=params["num_tags"],
             indices=params["indices"],
+            words=words,
+            nwords=nwords,
+            chars=chars,
+            nchars=nchars,
+            pred_ids=pred_ids,
         )
 
     def persist(self, file_name: Text, model_dir: Text) -> Optional[Dict[Text, Any]]:
@@ -569,7 +594,14 @@ class ConvLstmCrfEntityExtractor(EntityExtractor):
             train_utils.persist_tensor("vocab_words", self.vocab_words, self.graph)
             train_utils.persist_tensor("vocab_chars", self.vocab_chars, self.graph)
             train_utils.persist_tensor("vocab_tags", self.vocab_tags, self.graph)
-            train_utils.persist_tensor("predictions", self.predictions, self.graph)
+            train_utils.persist_tensor(
+                "reverse_vocab_tags", self.reverse_vocab_tags, self.graph
+            )
+            train_utils.persist_tensor("chars", self.chars, self.graph)
+            train_utils.persist_tensor("nchars", self.nchars, self.graph)
+            train_utils.persist_tensor("words", self.words, self.graph)
+            train_utils.persist_tensor("nwords", self.nwords, self.graph)
+            train_utils.persist_tensor("pred_ids", self.pred_ids, self.graph)
 
             saver = tf.train.Saver()
             saver.save(self.session, checkpoint)

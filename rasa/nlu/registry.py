@@ -8,7 +8,9 @@ import logging
 import typing
 from typing import Any, Dict, List, Optional, Text, Type
 
-from nlu.extractors.conv_lstm_crf_entity_extractor import ConvLstmCrfEntityExtractor
+from rasa.nlu.extractors.conv_lstm_crf_entity_extractor import (
+    ConvLstmCrfEntityExtractor,
+)
 from rasa.nlu.classifiers.embedding_intent_classifier import EmbeddingIntentClassifier
 from rasa.nlu.classifiers.keyword_intent_classifier import KeywordIntentClassifier
 from rasa.nlu.classifiers.mitie_intent_classifier import MitieIntentClassifier

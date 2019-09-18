@@ -198,6 +198,7 @@ def run(
         )
 
         interpreter = train_model(pipeline, data_train)
+
         result = evaluate_model(interpreter, data_test, report_folder)
 
         report = result["report"]
