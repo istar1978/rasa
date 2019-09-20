@@ -12,6 +12,12 @@ from typing import Any, Dict, Optional, Text, List, Tuple
 from jsonpickle import json
 from six.moves import reduce
 import numpy as np
+from tensor2tensor.layers.common_attention import add_timing_signal_1d
+from tensor2tensor.models.transformer import (
+    transformer_small,
+    transformer_prepare_encoder,
+    transformer_encoder,
+)
 
 from rasa.nlu.test import determine_token_labels
 from rasa.nlu.config import RasaNLUModelConfig
@@ -69,6 +75,15 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
         "evaluate_every_num_epochs": 5,  # small values may hurt performance
         # how many examples to use for hold out validation set
         "evaluate_on_num_examples": 0,  # large values may hurt performance
+        "use_transformer": True,
+        "C2": 0.002,
+        "layer_sizes": [256],
+        "num_heads": 4,
+        "pos_encoding": "timing",  # {"timing", "emb", "custom_timing"}
+        "max_seq_length": 256,
+        "pos_max_timescale": 1.0e2,
+        "use_last": False,
+        "bidirectional": True,
     }
     # end default properties (DOC MARKER - don't remove)
 
@@ -315,17 +330,27 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
     def _build_train_graph(
         self, iterator: tf.data.Iterator, training: bool = True
     ) -> Tuple[float, Dict[Text, Any]]:
+        # tf.enable_eager_execution()
         dropout = self.params["dropout"]
 
+        # labels = Tensor(seq, batch)
         features, labels = iterator.get_next()
+        # (Tensor(seq, batch), Tensor(batch)), (Tensor(seq, seq, batch), Tensor(seq, batch))
         (self.words, self.nwords), (self.chars, self.nchars) = features
 
+        # Tensor(seq, batch, dim)
         embeddings = self._featurization(dropout, training)
 
-        # LSTM
-        lstm_output = self._create_lstm(embeddings, dropout, training)
+        if self.params["use_transformer"]:
+            # Transformer
+            x = self._create_transformer(embeddings, dropout, training)
+        else:
+            # LSTM
+            # Tensor(seq, batch, lstm-size * 2) e.g. bidirectional
+            x = self._create_lstm(embeddings, dropout, training)
+
         # CRF
-        logits, crf_params, pred_ids = self._create_crf(lstm_output)
+        logits, crf_params, pred_ids = self._create_crf(x)
 
         # Loss
         tags = self.vocab_tags.lookup(labels)
@@ -358,10 +383,16 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
         # Read vocabs and inputs
         embeddings = self._featurization(training=False)
 
-        # LSTM
-        lstm_output = self._create_lstm(embeddings, training=False)
+        if self.params["use_transformer"]:
+            # Transformer
+            x = self._create_transformer(embeddings, training=False)
+        else:
+            # LSTM
+            # Tensor(seq, batch, lstm-size * 2) e.g. bidirectional
+            x = self._create_lstm(embeddings, training=False)
+
         # CRF
-        _, _, pred_ids = self._create_crf(lstm_output)
+        _, _, pred_ids = self._create_crf(x)
 
         # get predictions
         self.predictions = self.reverse_vocab_tags.lookup(tf.to_int64(pred_ids))
@@ -376,6 +407,48 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
             )
             pred_ids, _ = tf.contrib.crf.crf_decode(logits, crf_params, self.nwords)
             return logits, crf_params, pred_ids
+
+    def _create_transformer(
+        self,
+        embeddings: tf.Tensor,
+        dropout: Optional[float] = None,
+        training: bool = True,
+    ):
+
+        # mask different length sequences
+        mask = tf.sign(tf.reduce_max(embeddings, -1))
+        last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
+        mask = tf.cumsum(last, axis=1, reverse=True)
+
+        hparams = transformer_small()
+
+        hparams.num_hidden_layers = len(self.params["layer_sizes"])
+        hparams.hidden_size = self.params["layer_sizes"][0]
+        # it seems to be factor of 4 for transformer architectures in t2t
+        hparams.filter_size = self.params["layer_sizes"][0] * 4
+        hparams.num_heads = self.params["num_heads"]
+        hparams.pos = self.params["pos_encoding"]
+
+        hparams.max_length = self.params["max_seq_length"]
+        if not self.params["bidirectional"]:
+            hparams.unidirectional_encoder = True
+
+        # When not in training mode, set all forms of dropout to zero.
+        for key, value in hparams.values().items():
+            if key.endswith("dropout") or key == "label_smoothing":
+                setattr(hparams, key, value * tf.cast(training, tf.float32))
+
+        attention_weights = {}
+        x = train_utils.create_t2t_transformer_encoder(
+            embeddings,
+            mask,
+            attention_weights,
+            hparams,
+            self.params["C2"],
+            tf.convert_to_tensor(training),
+        )
+
+        return x
 
     def _create_lstm(
         self,
