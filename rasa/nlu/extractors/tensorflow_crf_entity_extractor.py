@@ -19,6 +19,7 @@ from tensor2tensor.models.transformer import (
     transformer_encoder,
 )
 
+from nlu.constants import MESSAGE_VECTOR_FEATURE_NAMES, MESSAGE_TEXT_ATTRIBUTE
 from rasa.nlu.test import determine_token_labels
 from rasa.nlu.config import RasaNLUModelConfig
 from rasa.nlu.extractors import EntityExtractor
@@ -145,13 +146,13 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
             train_dataset, eval_dataset = self._create_datasets(
                 training_data.training_examples
             )
-
             iterator = tf.data.Iterator.from_structure(
                 train_dataset.output_types,
                 train_dataset.output_shapes,
                 output_classes=train_dataset.output_classes,
             )
             train_init_op = iterator.make_initializer(train_dataset)
+
             if eval_dataset:
                 eval_init_op = iterator.make_initializer(eval_dataset)
             else:
@@ -343,7 +344,7 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
 
         if self.params["use_transformer"]:
             # Transformer
-            x = self._create_transformer(embeddings, dropout, training)
+            x = self._create_transformer(embeddings, training)
         else:
             # LSTM
             # Tensor(seq, batch, lstm-size * 2) e.g. bidirectional
@@ -408,13 +409,7 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
             pred_ids, _ = tf.contrib.crf.crf_decode(logits, crf_params, self.nwords)
             return logits, crf_params, pred_ids
 
-    def _create_transformer(
-        self,
-        embeddings: tf.Tensor,
-        dropout: Optional[float] = None,
-        training: bool = True,
-    ):
-
+    def _create_transformer(self, embeddings: tf.Tensor, training: bool = True):
         # mask different length sequences
         mask = tf.sign(tf.reduce_max(embeddings, -1))
         last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)

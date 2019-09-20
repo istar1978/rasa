@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional, Text, Union
+from typing import Any, Dict, List, Optional, Text
 import numpy as np
 
 from sklearn.feature_extraction.text import CountVectorizer
@@ -14,8 +14,6 @@ from rasa.nlu.training_data import Message, TrainingData
 logger = logging.getLogger(__name__)
 
 from rasa.nlu.constants import (
-    MESSAGE_RESPONSE_ATTRIBUTE,
-    MESSAGE_INTENT_ATTRIBUTE,
     MESSAGE_TEXT_ATTRIBUTE,
     MESSAGE_TOKENS_NAMES,
     MESSAGE_ATTRIBUTES,
@@ -475,12 +473,30 @@ class CountVectorsFeaturizer(Featurizer):
 
         if self._check_attribute_vocabulary(attribute):
             # count vectorizer was trained
-            featurized_attributes = (
-                self.vectorizers[attribute].transform(attribute_texts).toarray()
-            )
+            featurized_attributes = self._create_sequence(attribute, attribute_texts)
             return featurized_attributes
         else:
             return None
+
+    @staticmethod
+    def _get_text_sequence(text):
+        return text.split()
+
+    def _create_sequence(self, attribute: Text, attribute_texts: List[Text]):
+        feature_len = len(self.vectorizers[attribute].vocabulary_.keys())
+
+        texts = [self._get_text_sequence(text) for text in attribute_texts]
+
+        seq_len = max([len(tokens) for tokens in texts])
+        num_exs = len(texts)
+        X = np.ones([num_exs, seq_len, feature_len], dtype=np.int32) * -1
+
+        for i, tokens in enumerate(texts):
+            x = self.vectorizers[attribute].transform(tokens)
+            x.sort_indices()
+            X[i, : x.shape[0], :] = x.toarray()
+
+        return X
 
     def train(
         self, training_data: TrainingData, cfg: RasaNLUModelConfig = None, **kwargs: Any

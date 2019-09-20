@@ -52,6 +52,7 @@ FLAIR_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "FlairEntityExtracto
 
 TF_PIPELINE = [
     {"name": "WhitespaceTokenizer"},
+    {"name": "CountVectorsFeaturizer"},
     {"name": "TensorflowCrfEntityExtractor"},
 ]
 
