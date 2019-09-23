@@ -82,6 +82,10 @@ class Event(object):
 
     def __init__(self, timestamp: Optional[float] = None):
         self.timestamp = timestamp if timestamp else time.time()
+        self.counter = 0
+        self.drop = 0
+        self.other = 0
+        self.total = 0
 
     def __ne__(self, other: Any) -> bool:
         # Not strictly necessary, but to avoid having both x==y and x!=y

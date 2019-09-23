@@ -162,10 +162,10 @@ def _add_edge(graph, u, v, key, label=None, **kwargs):
     if key == EDGE_NONE_LABEL:
         label = ""
 
-    if not graph.has_edge(u, v, key=EDGE_NONE_LABEL):
+    if not graph.has_edge(u, v, key=key):
         graph.add_edge(u, v, key=key, label=label, **kwargs)
     else:
-        d = graph.get_edge_data(u, v, key=EDGE_NONE_LABEL)
+        d = graph.get_edge_data(u, v, key=key)
         _transfer_style(kwargs, d)
 
 
@@ -175,6 +175,10 @@ def _transfer_style(source, target):
     Used if a node is highlighted and merged with another node."""
 
     clazzes = source.get("class", "")
+
+    target["counter"] = max(target.get("counter", 0), source.get("counter", 0))
+    target["other"] = target.get("other", 0) + source.get("other", 0)
+    target["drop"] = target.get("drop", 0) + source.get("drop", 0)
 
     special_classes = {"dashed", "active"}
 
@@ -223,7 +227,10 @@ def _merge_equivalent_nodes(graph, max_history):
                                 succ_node,
                                 k,
                                 d.get("label"),
-                                **{"class": d.get("class", "")}
+                                **{"class": d.get("class", ""),
+                                   "counter": d.get("counter", 0),
+                                   "drop": d.get("drop", 0),
+                                   "other": d.get("other", 0)}
                             )
                             graph.remove_edge(j, succ_node)
                         # moves all incoming edges to the other node
@@ -235,7 +242,10 @@ def _merge_equivalent_nodes(graph, max_history):
                                 i,
                                 k,
                                 d.get("label"),
-                                **{"class": d.get("class", "")}
+                                **{"class": d.get("class", ""),
+                                   "counter": d.get("counter", 0),
+                                   "drop": d.get("drop", 0),
+                                   "other": d.get("other", 0)}
                             )
                             graph.remove_edge(prev_node, j)
                         graph.remove_node(j)
@@ -275,8 +285,36 @@ async def _replace_edge_labels_with_nodes(
                 fillcolor="lightblue",
                 **_transfer_style(d, {"class": "intent"})
             )
-            graph.add_edge(s, next_id, **{"class": d.get("class", "")})
+            graph.add_edge(s, next_id,
+                           label="{}%".format(round(d.pop("counter", 0)*100)),
+                           **{"class": d.get("class", "")})
             graph.add_edge(next_id, e, **{"class": d.get("class", "")})
+
+            if d.get("other"):
+                next_id += 1
+                graph.add_node(
+                    next_id,
+                    label="other",
+                    shape="rect",
+                    style="filled",
+                    fillcolor="lightgreen",
+                    **_transfer_style(d, {"class": "other"})
+                )
+                graph.add_edge(s, next_id,
+                               label="{}%".format(round(d.get("other", 0)* 100)))
+
+            if d.get("drop"):
+                next_id += 1
+                graph.add_node(
+                    next_id,
+                    label="drop",
+                    shape="rect",
+                    style="filled",
+                    fillcolor="lightred",
+                    **_transfer_style(d, {"class": "drop"})
+                )
+                graph.add_edge(s, next_id,
+                               label="{}%".format(round(d.get("drop", 0)* 100)))
 
 
 def visualization_html_path():
@@ -372,6 +410,9 @@ def _add_message_edge(
     current_node: int,
     next_node_idx: int,
     is_current: bool,
+    weight: float = 0,
+    drop: float = 0,
+    other: float = 0,
 ):
     """Create an edge based on the user message."""
 
@@ -388,7 +429,10 @@ def _add_message_edge(
         next_node_idx,
         message_key,
         message_label,
-        **{"class": "active" if is_current else ""}
+        **{"class": "active" if is_current else "",
+           "counter": weight,
+           "drop": drop,
+           "other": other}
     )
 
 
@@ -428,10 +472,9 @@ async def visualize_neighborhood(
                 idx -= 1
                 break
             if isinstance(el, UserUttered):
+                message = el
                 if not el.intent:
-                    message = await interpreter.parse(el.text)
-                else:
-                    message = el.parse_data
+                    el.parse_data = await interpreter.parse(el.text)
             elif (
                 isinstance(el, ActionExecuted) and el.action_name != ACTION_LISTEN_NAME
             ):
@@ -444,7 +487,10 @@ async def visualize_neighborhood(
                 )
 
                 _add_message_edge(
-                    graph, message, current_node, next_node_idx, is_current
+                    graph, message.parse_data if message else None, current_node, next_node_idx, is_current,
+                    weight=message.counter if message else 0,
+                    drop=message.drop if message else 0,
+                    other=message.other if message else 0,
                 )
                 current_node = next_node_idx
 
@@ -464,7 +510,7 @@ async def visualize_neighborhood(
                     next_node_idx,
                     label="  ?  "
                     if not message
-                    else sanitize(message.get("intent", {}).get("name", "  ?  ")),
+                    else sanitize(message.parse_data.get("intent", {}).get("name", "  ?  ")),
                     shape="rect",
                     **{"class": "intent dashed active"}
                 )
@@ -485,7 +531,11 @@ async def visualize_neighborhood(
         else:
             target = END_NODE_ID
 
-        _add_message_edge(graph, message, current_node, target, is_current)
+        _add_message_edge(graph, message.parse_data if message else None, current_node, target, is_current,
+                          weight=message.counter if message else 0,
+                          drop=message.drop if message else 0,
+                          other=message.other if message else 0,
+                          )
 
     if should_merge_nodes:
         _merge_equivalent_nodes(graph, max_history)
@@ -529,6 +579,7 @@ async def visualize_stories(
     nlu_training_data: Optional["TrainingData"] = None,
     should_merge_nodes: bool = True,
     fontsize: int = 12,
+    analytics_trackers = None
 ):
     """Given a set of stories, generates a graph visualizing the flows in the
     stories.
@@ -569,6 +620,60 @@ async def visualize_stories(
     )
     completed_trackers = g.generate()
     event_sequences = [t.events for t in completed_trackers]
+
+    if analytics_trackers:
+        for t in analytics_trackers:
+            matching = [e.copy() for e in event_sequences]
+
+            for e in t.events:
+                if e.type_name not in {"action", "user"}:
+                    continue
+
+                def same_event(m):
+                    while m and m[0].type_name not in {"action", "user"}:
+                        del m[0]
+
+                    if not m:
+                        return False
+                    m0 = m[0]
+                    m0.total += 1
+                    if m0.type_name != e.type_name:
+                        return False
+                    elif m0.type_name == "action" and m0.action_name == e.action_name:
+                        m0.counter += 1
+                        del m[0]
+                        return True
+                    elif m0.type_name == "user" and m0.intent.get("name") == e.intent.get("name"):
+                        m0.counter += 1
+                        del m[0]
+                        return True
+                    else:
+                        return False
+
+                filtered = list(filter(same_event, matching))
+                if not filtered and matching:
+                    for m in matching:
+                        if m:
+                            m[0].other += 1
+                            break
+
+                matching = filtered
+                if not matching:
+                    break
+
+            droppped = False
+            for ms in matching:
+                if ms:
+                    if not droppped:
+                        droppped = True
+                        ms[0].drop += 1
+                    ms[0].total += 1
+
+        for es in event_sequences:
+            for e in es:
+                e.counter = e.counter / e.total if e.total else 0
+                e.drop = e.drop / e.total if e.total else 0
+                e.other = e.other / e.total if e.total else 0
 
     graph = await visualize_neighborhood(
         None,
