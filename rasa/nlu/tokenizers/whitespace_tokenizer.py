@@ -27,6 +27,7 @@ class WhitespaceTokenizer(Tokenizer, Component):
         "intent_split_symbol": "_",
         # text will be tokenized with case sensitive as default
         "case_sensitive": True,
+        "add_class_label": True,
     }
 
     def __init__(self, component_config: Dict[Text, Any] = None) -> None:
@@ -40,6 +41,7 @@ class WhitespaceTokenizer(Tokenizer, Component):
         # split symbol for intents
         self.intent_split_symbol = self.component_config["intent_split_symbol"]
         self.case_sensitive = self.component_config["case_sensitive"]
+        self.add_class_label = self.component_config["add_class_label"]
 
     def train(
         self, training_data: TrainingData, config: RasaNLUModelConfig, **kwargs: Any
@@ -88,9 +90,15 @@ class WhitespaceTokenizer(Tokenizer, Component):
 
         running_offset = 0
         tokens = []
+
         for word in words:
             word_offset = text.index(word, running_offset)
             word_len = len(word)
             running_offset = word_offset + word_len
             tokens.append(Token(word, word_offset))
+
+        if self.add_class_label and attribute == MESSAGE_TEXT_ATTRIBUTE:
+            # using BERT logic, add `[CLS]` class label token
+            tokens.append(Token("__CLS__", len(text)))
+
         return tokens

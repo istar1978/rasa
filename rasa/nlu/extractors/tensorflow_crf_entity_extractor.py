@@ -76,7 +76,7 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
         "evaluate_every_num_epochs": 5,  # small values may hurt performance
         # how many examples to use for hold out validation set
         "evaluate_on_num_examples": 0,  # large values may hurt performance
-        "use_transformer": True,
+        "use_transformer": False,
         "C2": 0.002,
         "layer_sizes": [256],
         "num_heads": 4,
