@@ -490,7 +490,7 @@ async def test(
         warnings.simplefilter("ignore", UndefinedMetricWarning)
 
         targets, predictions = evaluation_store.serialise()
-        report, precision, f1, accuracy = get_evaluation_metrics(targets, predictions)
+        report, precision, f1, accuracy = get_evaluation_metrics(targets, predictions, exclude_label='action_listen')
 
     if out_directory:
         plot_story_evaluation(
@@ -528,6 +528,9 @@ def log_evaluation_table(
     include_report=True,
 ):  # pragma: no cover
     """Log the sklearn evaluation metrics."""
+    if 'action_listen' in golds:
+        logger.info("NOTE: Evaluation Results exclude `action_listen`!")
+        golds = [g for g in golds if g != 'action_listen']
     logger.info("Evaluation Results on {} level:".format(name))
     logger.info(
         "\tCorrect:          {} / {}".format(int(len(golds) * accuracy), len(golds))
