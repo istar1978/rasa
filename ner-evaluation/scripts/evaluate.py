@@ -249,7 +249,7 @@ if __name__ == "__main__":
             "tensorflow",
             "combined",
         ],
-        default="tensorflow",
+        default="combined",
         help="pipeline to evaluate",
     )
     parser.add_argument("--typo", action="store_true", help="use typo dataset")
