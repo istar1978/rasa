@@ -6,15 +6,17 @@ import typing
 from typing import Any, Dict, List, Optional, Text, Tuple
 import warnings
 
-from nlu.test import determine_token_labels
+from nlu.extractors import EntityExtractor
+from rasa.nlu.test import determine_token_labels
+from rasa.nlu.tokenizers import Token
 from rasa.nlu.classifiers import LABEL_RANKING_LENGTH
-from rasa.nlu.components import Component
 from rasa.utils import train_utils
 from rasa.nlu.constants import (
     MESSAGE_INTENT_ATTRIBUTE,
     MESSAGE_TEXT_ATTRIBUTE,
     MESSAGE_VECTOR_FEATURE_NAMES,
     MESSAGE_ENTITIES_ATTRIBUTE,
+    MESSAGE_TOKENS_NAMES,
 )
 
 import tensorflow as tf
@@ -32,7 +34,7 @@ if typing.TYPE_CHECKING:
     from rasa.nlu.training_data import Message
 
 
-class EmbeddingIntentClassifier(Component):
+class EmbeddingIntentClassifier(EntityExtractor):
     """Intent classifier using supervised embeddings.
 
     The embedding intent classifier embeds user inputs
@@ -53,7 +55,10 @@ class EmbeddingIntentClassifier(Component):
 
     provides = ["intent", "entities", "intent_ranking"]
 
-    requires = [MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE]]
+    requires = [
+        MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE],
+        MESSAGE_TOKENS_NAMES[MESSAGE_TEXT_ATTRIBUTE],
+    ]
 
     # default properties (DOC MARKER - don't remove)
     defaults = {
@@ -118,6 +123,11 @@ class EmbeddingIntentClassifier(Component):
         "evaluate_every_num_epochs": 20,  # small values may hurt performance
         # how many examples to use for calculation of training accuracy
         "evaluate_on_num_examples": 0,  # large values may hurt performance
+        # model config
+        # if true intent classification is trained and intent predicted
+        "intent_classification": False,
+        # if true named entity recognition is trained and entities predicted
+        "named_entity_recognition": True,
     }
     # end default properties (DOC MARKER - don't remove)
 
@@ -153,7 +163,7 @@ class EmbeddingIntentClassifier(Component):
         self.a_in = message_placeholder
         self.b_in = label_placeholder
         self.sim_all = similarity_all
-        self.pred_confidence = pred_confidence
+        self.intent_prediction = pred_confidence
         self.sim = similarity
 
         # persisted embeddings
@@ -242,13 +252,17 @@ class EmbeddingIntentClassifier(Component):
         self.evaluate_on_num_examples = config["evaluate_on_num_examples"]
 
     def _load_params(self) -> None:
-
         self._check_old_config_variables(self.component_config)
         self._tf_config = train_utils.load_tf_config(self.component_config)
         self._load_nn_architecture_params(self.component_config)
         self._load_embedding_params(self.component_config)
         self._load_regularization_params(self.component_config)
         self._load_visual_params(self.component_config)
+
+        self.intent_classification = self.component_config["intent_classification"]
+        self.named_entity_recognition = self.component_config[
+            "named_entity_recognition"
+        ]
 
     # package safety checks
     @classmethod
@@ -407,7 +421,7 @@ class EmbeddingIntentClassifier(Component):
         X = []
         intent_Y = []
         label_ids = []
-        tag_ids = []
+        tags = []
 
         for e in training_data.training_examples:
             self.max_seq_len = e.get(
@@ -426,19 +440,17 @@ class EmbeddingIntentClassifier(Component):
                     _tags.append(tag_id_dict[_tag])
                 else:
                     _tags.append(tag_id_dict["O"])
-            tag_ids.append(_tags)
+            tags.append(_tags)
 
         X = np.array(X)
         label_ids = np.array(label_ids)
-        tag_ids = np.array(tag_ids)
+        tags = np.array(tags)
 
         for label_id_idx in label_ids:
             intent_Y.append(self._encoded_all_label_ids[label_id_idx])
         intent_Y = np.array(intent_Y)
 
-        return train_utils.SessionData(
-            X=X, Y=intent_Y, label_ids=label_ids, tag_Y=tag_ids, tag_ids=tag_ids
-        )
+        return train_utils.SessionData(X=X, Y=intent_Y, label_ids=label_ids, tags=tags)
 
     # tf helpers:
     def _create_tf_embed_fnn(
@@ -470,73 +482,84 @@ class EmbeddingIntentClassifier(Component):
         """Bulid train graph using iterator."""
         self.a_in, self.b_in, self.c_in = self._iterator.get_next()
 
-        all_label_ids = tf.constant(
-            self._encoded_all_label_ids, dtype=tf.float32, name="all_labels_raw"
-        )
+        loss = metric = None
 
+        # transformer
         self.message_embed, mask = self._create_tf_sequence(self.a_in)
+
         last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
         last = tf.expand_dims(last, -1)
 
-        mask = tf.cumsum(last, axis=1, reverse=True)
-        sequence_lengths = tf.squeeze(tf.cast(tf.reduce_sum(mask, 1), tf.int32))
+        if self.intent_classification:
+            # get _cls_ vector for intent classification
+            self.cls_embed = tf.reduce_sum(self.message_embed * last, 1)
 
-        self.cls_embed = tf.reduce_sum(self.message_embed * last, 1)
-        # reduce dimensionality as input should not be sequence for intent
-        # classification
-        self.b_in = tf.reduce_sum(self.b_in, 1)
-        all_label_ids = tf.reduce_sum(all_label_ids, 1)
+            all_label_ids = tf.constant(
+                self._encoded_all_label_ids, dtype=tf.float32, name="all_labels_raw"
+            )
 
-        self.label_embed = self._create_tf_embed_fnn(
-            self.b_in,
-            self.hidden_layer_sizes["b"],
-            fnn_name="a_b" if self.share_hidden_layers else "b",
-            embed_name="b",
-        )
-        self.all_labels_embed = self._create_tf_embed_fnn(
-            all_label_ids,
-            self.hidden_layer_sizes["b"],
-            fnn_name="a_b" if self.share_hidden_layers else "b",
-            embed_name="b",
-        )
+            # reduce dimensionality as input should not be sequence for intent
+            # classification
+            self.b_in = tf.reduce_sum(self.b_in, 1)
+            all_label_ids = tf.reduce_sum(all_label_ids, 1)
 
-        crf_loss, crf_metrics = self._calculate_crf_loss(
-            self.message_embed, sequence_lengths, self.c_in
-        )
+            self.label_embed = self._create_tf_embed_fnn(
+                self.b_in,
+                self.hidden_layer_sizes["b"],
+                fnn_name="a_b" if self.share_hidden_layers else "b",
+                embed_name="b",
+            )
+            self.all_labels_embed = self._create_tf_embed_fnn(
+                all_label_ids,
+                self.hidden_layer_sizes["b"],
+                fnn_name="a_b" if self.share_hidden_layers else "b",
+                embed_name="b",
+            )
 
-        intent_loss, intent_acc = train_utils.calculate_loss_acc(
-            self.cls_embed,
-            self.label_embed,
-            self.b_in,
-            self.all_labels_embed,
-            all_label_ids,
-            self.num_neg,
-            None,
-            self.loss_type,
-            self.mu_pos,
-            self.mu_neg,
-            self.use_max_sim_neg,
-            self.C_emb,
-            self.scale_loss,
-        )
+            loss, metric = train_utils.calculate_loss_acc(
+                self.cls_embed,
+                self.label_embed,
+                self.b_in,
+                self.all_labels_embed,
+                all_label_ids,
+                self.num_neg,
+                None,
+                self.loss_type,
+                self.mu_pos,
+                self.mu_neg,
+                self.use_max_sim_neg,
+                self.C_emb,
+                self.scale_loss,
+            )
 
-        return crf_loss, crf_metrics["f1"]
+        if self.named_entity_recognition:
+            # get sequence lengths for NER
+            mask = tf.cumsum(last, axis=1, reverse=True)
+            sequence_lengths = tf.squeeze(tf.cast(tf.reduce_sum(mask, 1), tf.int32))
+
+            loss, crf_metrics = self._calculate_crf_loss(
+                self.message_embed, sequence_lengths, self.c_in
+            )
+
+            metric = crf_metrics["f1"]
+
+        return loss, metric
 
     def _calculate_crf_loss(
-        self, a_in: tf.Tensor, sequence_lengths: tf.Tensor, c_in: tf.Tensor
+        self, inputs: tf.Tensor, sequence_lengths: tf.Tensor, tag_indices: tf.Tensor
     ):
         """
         Args:
-            a_in: tensor (batch-size, max-sequence-length, dimension)
-            sequence_lengths: tensor (batch-size, max-seq-length)
-            c_in: (batch-size, max-sequence-length, num-tags)
+            inputs: tensor (batch-size, max-sequence-length, dimension)
+            sequence_lengths: tensor (batch-size)
+            tag_indices: (batch-size, max-sequence-length)
         """
         # CRF
-        crf_params, logits, pred_ids = self._create_crf(a_in, sequence_lengths)
+        crf_params, logits, pred_ids = self._create_crf(inputs, sequence_lengths)
 
         # Loss
         log_likelihood, _ = tf.contrib.crf.crf_log_likelihood(
-            logits, c_in, sequence_lengths, crf_params
+            logits, tag_indices, sequence_lengths, crf_params
         )
         loss = tf.reduce_mean(-log_likelihood)
 
@@ -547,23 +570,32 @@ class EmbeddingIntentClassifier(Component):
         metrics = {
             # "acc": tf.metrics.accuracy(c_in, pred_ids, weights),
             "precision": precision(
-                c_in, pred_ids, self.num_tags, pos_tag_indices, weights
+                tag_indices, pred_ids, self.num_tags, pos_tag_indices, weights
             ),
-            "recall": recall(c_in, pred_ids, self.num_tags, pos_tag_indices, weights),
-            "f1": f1(c_in, pred_ids, self.num_tags, pos_tag_indices, weights),
+            "recall": recall(
+                tag_indices, pred_ids, self.num_tags, pos_tag_indices, weights
+            ),
+            "f1": f1(tag_indices, pred_ids, self.num_tags, pos_tag_indices, weights),
         }
         for metric_name, op in metrics.items():
             tf.summary.scalar(metric_name, op[1])
 
         return loss, metrics
 
-    def _create_crf(self, a_in, sequence_lengths):
-        logits = tf.layers.dense(a_in, self.num_tags, name="crf-logits")
-        crf_params = tf.get_variable(
-            "crf-params", [self.num_tags, self.num_tags], dtype=tf.float32
-        )
-        pred_ids, _ = tf.contrib.crf.crf_decode(logits, crf_params, sequence_lengths)
-        return crf_params, logits, pred_ids
+    def _create_crf(
+        self, input: tf.Tensor, sequence_lengths: tf.Tensor
+    ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
+
+            logits = tf.layers.dense(input, self.num_tags, name="crf-logits")
+            crf_params = tf.get_variable(
+                "crf-params", [self.num_tags, self.num_tags], dtype=tf.float32
+            )
+            pred_ids, _ = tf.contrib.crf.crf_decode(
+                logits, crf_params, sequence_lengths
+            )
+
+            return crf_params, logits, pred_ids
 
     def _create_tf_sequence(self, a_in) -> Tuple["tf.Tensor", "tf.Tensor"]:
         """Create sequence level embedding and mask."""
@@ -612,7 +644,7 @@ class EmbeddingIntentClassifier(Component):
             tf.float32, (None, None, session_data.Y.shape[-1]), name="b"
         )
         self.c_in = tf.placeholder(
-            tf.int32, (None, None, session_data.tag_Y.shape[-1]), name="c"
+            tf.int64, (None, None, session_data.tag_Y.shape[-1]), name="c"
         )
 
         self.message_embed, mask = self._create_tf_sequence(self.a_in)
@@ -620,36 +652,38 @@ class EmbeddingIntentClassifier(Component):
         last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
         last = tf.expand_dims(last, -1)
 
-        self.cls_embed = tf.reduce_sum(self.message_embed * last, 1)
-        # reduce dimensionality as input should not be sequence for intent
-        # classification
-        self.b_in = tf.reduce_sum(self.b_in, 1)
+        if self.intent_classification:
+            self.cls_embed = tf.reduce_sum(self.message_embed * last, 1)
+            # reduce dimensionality as input should not be sequence for intent
+            # classification
+            self.b_in = tf.reduce_sum(self.b_in, 1)
 
-        self.sim_all = train_utils.tf_raw_sim(
-            self.cls_embed[:, tf.newaxis, :],
-            self.all_labels_embed[tf.newaxis, :, :],
-            None,
-        )
+            self.sim_all = train_utils.tf_raw_sim(
+                self.cls_embed[:, tf.newaxis, :],
+                self.all_labels_embed[tf.newaxis, :, :],
+                None,
+            )
 
-        self.label_embed = self._create_tf_embed_fnn(
-            self.b_in,
-            self.hidden_layer_sizes["b"],
-            fnn_name="a_b" if self.share_hidden_layers else "b",
-            embed_name="b",
-        )
+            self.label_embed = self._create_tf_embed_fnn(
+                self.b_in,
+                self.hidden_layer_sizes["b"],
+                fnn_name="a_b" if self.share_hidden_layers else "b",
+                embed_name="b",
+            )
 
-        # predict intents
-        self.sim = train_utils.tf_raw_sim(
-            self.cls_embed[:, tf.newaxis, :], self.label_embed, None
-        )
-        return train_utils.confidence_from_sim(self.sim_all, self.similarity_type)
+            # predict intents
+            self.sim = train_utils.tf_raw_sim(
+                self.cls_embed[:, tf.newaxis, :], self.label_embed, None
+            )
+            self.intent_prediction = train_utils.confidence_from_sim(
+                self.sim_all, self.similarity_type
+            )
 
-        # predict tags
-        # _, _, pred_ids = self._create_crf(self.message_embed, self.c_in)
-        # self.predictions = [self.inverted_tag_dict[p] for p in tf.to_int64(pred_ids)]
+        if self.named_entity_recognition:
+            # predict tags
+            _, _, self.tag_prediction = self._create_crf(self.message_embed, self.c_in)
 
     def check_input_dimension_consistency(self, session_data):
-
         if self.share_hidden_layers:
             if session_data.X[0].shape[-1] != session_data.Y[0].shape[-1]:
                 raise ValueError(
@@ -707,7 +741,6 @@ class EmbeddingIntentClassifier(Component):
         return session_data
 
     def _check_enough_labels(self, session_data) -> bool:
-
         return len(np.unique(session_data.label_ids)) >= 2
 
     def train(
@@ -724,8 +757,8 @@ class EmbeddingIntentClassifier(Component):
 
         session_data = self.preprocess_train_data(training_data)
 
-        possible_to_train = self._check_enough_labels(session_data)
-
+        # possible_to_train = self._check_enough_labels(session_data)
+        #
         # if not possible_to_train:
         #     logger.error(
         #         "Can not train a classifier. "
@@ -782,14 +815,13 @@ class EmbeddingIntentClassifier(Component):
             )
 
             # rebuild the graph for prediction
-            self.pred_confidence = self._build_tf_pred_graph(session_data)
+            self._build_tf_pred_graph(session_data)
 
     # process helpers
     # noinspection PyPep8Naming
     def _calculate_message_sim(self, X: np.ndarray) -> Tuple[np.ndarray, List[float]]:
         """Calculate message similarities"""
-
-        message_sim = self.session.run(self.pred_confidence, feed_dict={self.a_in: X})
+        message_sim = self.session.run(self.intent_prediction, feed_dict={self.a_in: X})
 
         message_sim = message_sim.flatten()  # sim is a matrix
 
@@ -799,8 +831,67 @@ class EmbeddingIntentClassifier(Component):
         # transform sim to python list for JSON serializing
         return label_ids, message_sim.tolist()
 
-    def predict_label(self, message):
+    def predict_entities(self, message: "Message") -> List[Dict]:
+        if self.session is None:
+            logger.error(
+                "There is no trained tf.session: "
+                "component is either not trained or "
+                "didn't receive enough training data"
+            )
+        else:
+            # get features (bag of words) for a message
+            # noinspection PyPep8Naming
+            X = message.get(
+                MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE]
+            ).reshape(1, 1, -1)
 
+            # load tf graph and session
+            pred_ids = self.session.run(self.tag_prediction, feed_dict={self.a_in: X})
+
+            predictions = [self.inverted_tag_dict[p] for p in tf.to_int64(pred_ids)]
+
+            tags = predictions[0]
+            entities = self._convert_tags_to_entities(
+                message.text, message.get("tokens", []), tags
+            )
+
+            extracted = self.add_extractor_name(entities)
+            entities = message.get("entities", []) + extracted
+
+            return entities
+
+    def _convert_tags_to_entities(
+        self, text: str, tokens: List[Token], tags: List[Text]
+    ) -> List[Dict[Text, Any]]:
+        entities = []
+        last_tag = "O"
+        for token, tag in zip(tokens, tags):
+            if tag == "O":
+                last_tag = tag
+                continue
+
+            # new tag found
+            if last_tag != tag:
+                entity = {
+                    "entity": tag,
+                    "start": token.offset,
+                    "end": token.end,
+                    "extractor": "flair",
+                }
+                entities.append(entity)
+
+            # belongs to last entity
+            elif last_tag == tag:
+                entities[-1]["end"] = token.end
+
+            last_tag = tag
+
+        for entity in entities:
+            entity["value"] = text[entity["start"] : entity["end"]]
+
+        return entities
+
+    def predict_label(self, message):
         label = {"name": None, "confidence": 0.0}
         label_ranking = []
         if self.session is None:
@@ -838,10 +929,16 @@ class EmbeddingIntentClassifier(Component):
     def process(self, message: "Message", **kwargs: Any) -> None:
         """Return the most likely label and its similarity to the input."""
 
-        label, label_ranking = self.predict_label(message)
+        if self.intent_classification:
+            label, label_ranking = self.predict_label(message)
 
-        message.set("intent", label, add_to_output=True)
-        message.set("intent_ranking", label_ranking, add_to_output=True)
+            message.set("intent", label, add_to_output=True)
+            message.set("intent_ranking", label_ranking, add_to_output=True)
+
+        if self.named_entity_recognition:
+            entities = self.predict_entities(message)
+
+            message.set("entities", entities, add_to_output=True)
 
     def persist(self, file_name: Text, model_dir: Text) -> Dict[Text, Any]:
         """Persist this model into the passed directory.
@@ -868,7 +965,7 @@ class EmbeddingIntentClassifier(Component):
 
             train_utils.persist_tensor("similarity_all", self.sim_all, self.graph)
             train_utils.persist_tensor(
-                "pred_confidence", self.pred_confidence, self.graph
+                "pred_confidence", self.intent_prediction, self.graph
             )
             train_utils.persist_tensor("similarity", self.sim, self.graph)
 

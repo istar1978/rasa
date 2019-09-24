@@ -52,8 +52,13 @@ FLAIR_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "FlairEntityExtracto
 
 TF_PIPELINE = [
     {"name": "WhitespaceTokenizer"},
-    {"name": "CountVectorsFeaturizer"},
     {"name": "TensorflowCrfEntityExtractor"},
+]
+
+COMBINED_PIPELINE = [
+    {"name": "WhitespaceTokenizer"},
+    {"name": "CountVectorsFeaturizer"},
+    {"name": "EmbeddingIntentClassifier"},
 ]
 
 
@@ -236,7 +241,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--pipeline",
         type=str,
-        choices=["default", "default-spacy", "spacy", "flair", "tensorflow"],
+        choices=[
+            "default",
+            "default-spacy",
+            "spacy",
+            "flair",
+            "tensorflow",
+            "combined",
+        ],
         default="tensorflow",
         help="pipeline to evaluate",
     )
@@ -244,7 +256,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--train-frac",
         type=float,
-        default=0.5,
+        default=0.8,
         help="percentage of training datset examples",
     )
     parser.add_argument("--runs", type=int, default=1, help="number of runs")
@@ -257,6 +269,7 @@ if __name__ == "__main__":
         "spacy": (SPACY_NER_PIPELINE, "spacy_pipeline"),
         "flair": (FLAIR_PIPELINE, "flair_pipeline"),
         "tensorflow": (TF_PIPELINE, "tf_pipeline"),
+        "combined": (COMBINED_PIPELINE, "combined_pipeline"),
     }
 
     pipeline = pipelines[args.pipeline][0]

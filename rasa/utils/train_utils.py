@@ -22,7 +22,7 @@ tf.contrib._warning = None
 logger = logging.getLogger(__name__)
 
 # namedtuple for all tf session related data
-SessionData = namedtuple("SessionData", ("X", "Y", "label_ids", "tag_Y", "tag_ids"))
+SessionData = namedtuple("SessionData", ("X", "Y", "label_ids", "tags"))
 
 
 def load_tf_config(config: Dict[Text, Any]) -> Optional[tf.compat.v1.ConfigProto]:
@@ -79,12 +79,8 @@ def train_val_split(
     label_ids_train = np.concatenate([label_ids_train, solo_label_ids])
 
     return (
-        SessionData(
-            X=X_train, Y=Y_train, label_ids=label_ids_train, tag_ids=None, tag_Y=None
-        ),
-        SessionData(
-            X=X_val, Y=Y_val, label_ids=label_ids_val, tag_ids=None, tag_Y=None
-        ),
+        SessionData(X=X_train, Y=Y_train, label_ids=label_ids_train, tags=None),
+        SessionData(X=X_val, Y=Y_val, label_ids=label_ids_val, tags=None),
     )
 
 
@@ -96,8 +92,7 @@ def shuffle_session_data(session_data: "SessionData") -> "SessionData":
         X=session_data.X[ids],
         Y=session_data.Y[ids],
         label_ids=session_data.label_ids[ids],
-        tag_ids=session_data.tag_ids[ids],
-        tag_Y=session_data.tag_Y[ids],
+        tags=session_data.tags[ids],
     )
 
 
@@ -113,8 +108,7 @@ def split_session_data_by_label(
                 X=session_data.X[session_data.label_ids == label_id],
                 Y=session_data.Y[session_data.label_ids == label_id],
                 label_ids=session_data.label_ids[session_data.label_ids == label_id],
-                tag_ids=session_data.tag_ids[session_data.label_ids == label_id],
-                tag_Y=session_data.tag_Y[session_data.label_ids == label_id],
+                tags=session_data.tags[session_data.label_ids == label_id],
             )
         )
     return label_data
@@ -146,8 +140,7 @@ def balance_session_data(
     new_X = []
     new_Y = []
     new_label_ids = []
-    new_tag_Y = []
-    new_tag_ids = []
+    new_tags = []
     while min(num_data_cycles) == 0:
         if shuffle:
             indices_of_labels = np.random.permutation(num_label_ids)
@@ -180,13 +173,8 @@ def balance_session_data(
                     data_idx[index] : data_idx[index] + index_batch_size
                 ]
             )
-            new_tag_Y.append(
-                label_data[index].tag_Y[
-                    data_idx[index] : data_idx[index] + index_batch_size
-                ]
-            )
-            new_tag_ids.append(
-                label_data[index].tag_ids[
+            new_tags.append(
+                label_data[index].tags[
                     data_idx[index] : data_idx[index] + index_batch_size
                 ]
             )
@@ -203,8 +191,7 @@ def balance_session_data(
         X=np.concatenate(new_X),
         Y=np.concatenate(new_Y),
         label_ids=np.concatenate(new_label_ids),
-        tag_ids=np.concatenate(new_tag_ids),
-        tag_Y=np.concatenate(new_tag_Y),
+        tags=np.concatenate(new_tags),
     )
 
 
@@ -256,16 +243,16 @@ def create_tf_dataset(
     else:
         shape_Y = (None, None, session_data.Y[0].shape[-1])
 
-    if session_data.tag_Y[0].ndim == 1:
-        shape_tag_Y = (None, session_data.tag_Y[0].shape[-1])
+    if session_data.tags[0].ndim == 1:
+        shape_tag_Y = (None, session_data.tags[0].shape[-1])
     else:
-        shape_tag_Y = (None, None, session_data.tag_Y[0].shape[-1])
+        shape_tag_Y = (None, None, session_data.tags[0].shape[-1])
 
     return tf.data.Dataset.from_generator(
         lambda batch_size_: gen_batch(
             session_data, batch_size_, batch_strategy, shuffle
         ),
-        output_types=(tf.float32, tf.float32, tf.int32),
+        output_types=(tf.float32, tf.float32, tf.int64),
         output_shapes=(shape_X, shape_Y, shape_tag_Y),
         args=([batch_size]),
     )

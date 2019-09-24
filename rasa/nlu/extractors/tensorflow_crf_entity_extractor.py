@@ -355,6 +355,7 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
 
         # Loss
         tags = self.vocab_tags.lookup(labels)
+
         log_likelihood, _ = tf.contrib.crf.crf_log_likelihood(
             logits, tags, self.nwords, crf_params
         )
