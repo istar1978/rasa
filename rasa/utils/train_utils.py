@@ -216,7 +216,7 @@ def gen_batch(
     for batch_num in range(num_batches):
         batch_x = session_data.X[batch_num * batch_size : (batch_num + 1) * batch_size]
         batch_y = session_data.Y[batch_num * batch_size : (batch_num + 1) * batch_size]
-        batch_y_tag = session_data.tag_Y[
+        batch_y_tag = session_data.tags[
             batch_num * batch_size : (batch_num + 1) * batch_size
         ]
 

@@ -125,9 +125,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
         "evaluate_on_num_examples": 0,  # large values may hurt performance
         # model config
         # if true intent classification is trained and intent predicted
-        "intent_classification": False,
+        "intent_classification": True,
         # if true named entity recognition is trained and entities predicted
-        "named_entity_recognition": True,
+        "named_entity_recognition": False,
     }
     # end default properties (DOC MARKER - don't remove)
 
@@ -644,7 +644,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
             tf.float32, (None, None, session_data.Y.shape[-1]), name="b"
         )
         self.c_in = tf.placeholder(
-            tf.int64, (None, None, session_data.tag_Y.shape[-1]), name="c"
+            tf.int64, (None, None, session_data.tags.shape[-1]), name="c"
         )
 
         self.message_embed, mask = self._create_tf_sequence(self.a_in)
