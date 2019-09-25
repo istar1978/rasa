@@ -71,6 +71,8 @@ class CountVectorsFeaturizer(Featurizer):
         "max_ngram": 1,  # int
         # limit vocabulary size
         "max_features": None,  # int or None
+        # max sequence length determined during training
+        "max_seq_len": None,  # int or None
         # if convert all characters to lowercase
         "lowercase": True,  # bool
         # handling Out-Of-Vacabulary (OOV) words
@@ -116,6 +118,9 @@ class CountVectorsFeaturizer(Featurizer):
 
         # if convert all characters to lowercase
         self.lowercase = self.component_config["lowercase"]
+
+        # max seq length determined during training
+        self.max_seq_len = self.component_config["max_seq_len"]
 
     # noinspection PyPep8Naming
     def _load_OOV_params(self):
@@ -361,7 +366,6 @@ class CountVectorsFeaturizer(Featurizer):
             analyzer=analyzer,
             vocabulary=vocabulary,
         )
-
         attribute_vectorizers = {}
 
         for attribute in MESSAGE_ATTRIBUTES:
@@ -487,9 +491,11 @@ class CountVectorsFeaturizer(Featurizer):
 
         texts = [self._get_text_sequence(text) for text in attribute_texts]
 
-        seq_len = max([len(tokens) for tokens in texts])
+        if self.max_seq_len is None:
+            self.max_seq_len = max([len(tokens) for tokens in texts])
+
         num_exs = len(texts)
-        X = np.ones([num_exs, seq_len, feature_len], dtype=np.int32) * -1
+        X = np.ones([num_exs, self.max_seq_len, feature_len], dtype=np.int32) * -1
 
         for i, tokens in enumerate(texts):
             x = self.vectorizers[attribute].transform(tokens)
@@ -544,19 +550,20 @@ class CountVectorsFeaturizer(Featurizer):
                 "component is either not trained or "
                 "didn't receive enough training data"
             )
-        else:
-            message_text = self._get_message_text_by_attribute(
-                message, attribute=MESSAGE_TEXT_ATTRIBUTE
-            )
+            return
 
-            features = self._create_sequence(MESSAGE_TEXT_ATTRIBUTE, [message_text])
+        attribute = MESSAGE_TEXT_ATTRIBUTE
+        message_text = self._get_message_text_by_attribute(message, attribute=attribute)
+
+        if self._check_attribute_vocabulary(attribute):
+            features = self._create_sequence(attribute, [message_text])
 
             message.set(
-                MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE],
+                MESSAGE_VECTOR_FEATURE_NAMES[attribute],
                 self._combine_with_existing_features(
                     message,
                     features[0],
-                    feature_name=MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE],
+                    feature_name=MESSAGE_VECTOR_FEATURE_NAMES[attribute],
                 ),
             )
 
@@ -583,11 +590,15 @@ class CountVectorsFeaturizer(Featurizer):
 
                 if self.use_shared_vocab:
                     # Only persist vocabulary from one attribute. Can be loaded and distributed to all attributes.
-                    utils.json_pickle(
-                        featurizer_file, attribute_vocabularies[MESSAGE_TEXT_ATTRIBUTE]
-                    )
+                    vocab = attribute_vocabularies[MESSAGE_TEXT_ATTRIBUTE]
                 else:
-                    utils.json_pickle(featurizer_file, attribute_vocabularies)
+                    vocab = attribute_vocabularies
+
+                utils.json_pickle(
+                    featurizer_file,
+                    {"vocabulary": vocab, "max_seq_len": self.max_seq_len},
+                )
+
         return {"file": file_name}
 
     @classmethod
@@ -604,7 +615,10 @@ class CountVectorsFeaturizer(Featurizer):
         featurizer_file = os.path.join(model_dir, file_name)
 
         if os.path.exists(featurizer_file):
-            vocabulary = utils.json_unpickle(featurizer_file)
+            data = utils.json_unpickle(featurizer_file)
+
+            vocabulary = data["vocabulary"]
+            meta["max_seq_len"] = data["max_seq_len"]
 
             share_vocabulary = meta["use_shared_vocab"]
 
@@ -634,6 +648,9 @@ class CountVectorsFeaturizer(Featurizer):
                     analyzer=meta["analyzer"],
                     vocabulary=vocabulary,
                 )
+
+            for v in vectorizers.values():
+                v.vocabulary_ = v.vocabulary
 
             return cls(meta, vectorizers)
         else:

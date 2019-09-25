@@ -82,6 +82,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         "pos_encoding": "timing",  # string 'timing' or 'emb'
         # max sequence length if pos_encoding='emb'
         "max_seq_length": 256,
+        "max_seq_len": None,
         # training parameters
         # initial and final batch sizes - batch size will be
         # linearly increased for each epoch
@@ -92,6 +93,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
         "epochs": 25,
         # set random seed to any int to get reproducible results
         "random_seed": None,
+        # number of tag labels
+        "num_tags": None,
         # embedding parameters
         # dimension size of embedding vectors
         "embed_dim": 20,
@@ -135,16 +138,21 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self,
         component_config: Optional[Dict[Text, Any]] = None,
         inverted_label_dict: Optional[Dict[int, Text]] = None,
+        inverted_tag_dict: Optional[Dict[int, Text]] = None,
         session: Optional["tf.Session"] = None,
         graph: Optional["tf.Graph"] = None,
         message_placeholder: Optional["tf.Tensor"] = None,
         label_placeholder: Optional["tf.Tensor"] = None,
+        tag_placeholder: Optional["tf.Tensor"] = None,
         similarity_all: Optional["tf.Tensor"] = None,
-        pred_confidence: Optional["tf.Tensor"] = None,
+        intent_prediction: Optional["tf.Tensor"] = None,
+        tag_prediction: Optional["tf.Tensor"] = None,
         similarity: Optional["tf.Tensor"] = None,
         message_embed: Optional["tf.Tensor"] = None,
+        cls_embed: Optional["tf.Tensor"] = None,
         label_embed: Optional["tf.Tensor"] = None,
         all_labels_embed: Optional["tf.Tensor"] = None,
+        attention_weights: Optional["tf.Tensor"] = None,
     ) -> None:
         """Declare instant variables with default values"""
 
@@ -154,6 +162,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
         # transform numbers to labels
         self.inverted_label_dict = inverted_label_dict
+        # transform numbers to tags
+        self.inverted_tag_dict = inverted_tag_dict
         # encode all label_ids with numbers
         self._encoded_all_label_ids = None
 
@@ -162,12 +172,16 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.graph = graph
         self.a_in = message_placeholder
         self.b_in = label_placeholder
+        self.c_in = tag_placeholder
         self.sim_all = similarity_all
-        self.intent_prediction = pred_confidence
+        self.intent_prediction = intent_prediction
+        self.tag_prediction = tag_prediction
         self.sim = similarity
+        self.attention_weights = attention_weights
 
         # persisted embeddings
         self.message_embed = message_embed
+        self.cls_embed = cls_embed
         self.label_embed = label_embed
         self.all_labels_embed = all_labels_embed
 
@@ -221,6 +235,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.num_heads = self.component_config["num_heads"]
         self.pos_encoding = self.component_config["pos_encoding"]
         self.max_seq_length = self.component_config["max_seq_length"]
+        self.max_seq_len = self.component_config["max_seq_len"]
 
     def _load_embedding_params(self, config: Dict[Text, Any]) -> None:
         self.embed_dim = config["embed_dim"]
@@ -263,6 +278,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.named_entity_recognition = self.component_config[
             "named_entity_recognition"
         ]
+        self.num_tags = self.component_config["num_tags"]
 
     # package safety checks
     @classmethod
@@ -419,13 +435,14 @@ class EmbeddingIntentClassifier(EntityExtractor):
         """Prepare data for training and create a SessionData object"""
 
         X = []
-        intent_Y = []
+        Y = []
         label_ids = []
         tags = []
 
         for e in training_data.training_examples:
             features = e.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE])
-            self.max_seq_len = features.shape[0]
+            if self.max_seq_len is None:
+                self.max_seq_len = features.shape[0]
             X.append(features)
             # every example should have an intent
             label_ids.append(label_id_dict[e.get(MESSAGE_INTENT_ATTRIBUTE)])
@@ -446,10 +463,10 @@ class EmbeddingIntentClassifier(EntityExtractor):
         tags = np.array(tags)
 
         for label_id_idx in label_ids:
-            intent_Y.append(self._encoded_all_label_ids[label_id_idx])
-        intent_Y = np.array(intent_Y)
+            Y.append(self._encoded_all_label_ids[label_id_idx])
+        Y = np.array(Y)
 
-        return train_utils.SessionData(X=X, Y=intent_Y, label_ids=label_ids, tags=tags)
+        return train_utils.SessionData(X=X, Y=Y, label_ids=label_ids, tags=tags)
 
     # tf helpers:
     def _create_tf_embed_fnn(
@@ -815,6 +832,10 @@ class EmbeddingIntentClassifier(EntityExtractor):
             # rebuild the graph for prediction
             self._build_tf_pred_graph(session_data)
 
+            self.attention_weights = train_utils.extract_attention(
+                self.attention_weights
+            )
+
     # process helpers
     # noinspection PyPep8Naming
     def _calculate_message_sim(self, X: np.ndarray) -> Tuple[np.ndarray, List[float]]:
@@ -959,17 +980,26 @@ class EmbeddingIntentClassifier(EntityExtractor):
         with self.graph.as_default():
             train_utils.persist_tensor("message_placeholder", self.a_in, self.graph)
             train_utils.persist_tensor("label_placeholder", self.b_in, self.graph)
+            train_utils.persist_tensor("tag_placeholder", self.c_in, self.graph)
 
             train_utils.persist_tensor("similarity_all", self.sim_all, self.graph)
             train_utils.persist_tensor(
-                "pred_confidence", self.intent_prediction, self.graph
+                "intent_prediction", self.intent_prediction, self.graph
+            )
+            train_utils.persist_tensor(
+                "tag_prediction", self.tag_prediction, self.graph
             )
             train_utils.persist_tensor("similarity", self.sim, self.graph)
 
             train_utils.persist_tensor("message_embed", self.message_embed, self.graph)
+            train_utils.persist_tensor("cls_embed", self.cls_embed, self.graph)
             train_utils.persist_tensor("label_embed", self.label_embed, self.graph)
             train_utils.persist_tensor(
                 "all_labels_embed", self.all_labels_embed, self.graph
+            )
+
+            train_utils.persist_tensor(
+                "attention_weights", self.attention_weights, self.graph
             )
 
             saver = tf.train.Saver()
@@ -979,6 +1009,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
             os.path.join(model_dir, file_name + ".inv_label_dict.pkl"), "wb"
         ) as f:
             pickle.dump(self.inverted_label_dict, f)
+
+        with open(os.path.join(model_dir, file_name + ".inv_tag_dict.pkl"), "wb") as f:
+            pickle.dump(self.inverted_tag_dict, f)
 
         with open(os.path.join(model_dir, file_name + ".tf_config.pkl"), "wb") as f:
             pickle.dump(self._tf_config, f)
@@ -1011,33 +1044,48 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
                 a_in = train_utils.load_tensor("message_placeholder")
                 b_in = train_utils.load_tensor("label_placeholder")
+                c_in = train_utils.load_tensor("tag_placeholder")
 
                 sim_all = train_utils.load_tensor("similarity_all")
-                pred_confidence = train_utils.load_tensor("pred_confidence")
+                intent_prediction = train_utils.load_tensor("intent_prediction")
+                tag_prediction = train_utils.load_tensor("tag_prediction")
                 sim = train_utils.load_tensor("similarity")
 
                 message_embed = train_utils.load_tensor("message_embed")
+                cls_embed = train_utils.load_tensor("cls_embed")
                 label_embed = train_utils.load_tensor("label_embed")
                 all_labels_embed = train_utils.load_tensor("all_labels_embed")
+
+                attention_weights = train_utils.load_tensor("attention_weights")
 
             with open(
                 os.path.join(model_dir, file_name + ".inv_label_dict.pkl"), "rb"
             ) as f:
                 inv_label_dict = pickle.load(f)
 
+            with open(
+                os.path.join(model_dir, file_name + ".inv_tag_dict.pkl"), "rb"
+            ) as f:
+                inv_tag_dict = pickle.load(f)
+
             return cls(
                 component_config=meta,
                 inverted_label_dict=inv_label_dict,
+                inverted_tag_dict=inv_tag_dict,
                 session=session,
                 graph=graph,
                 message_placeholder=a_in,
                 label_placeholder=b_in,
+                tag_placeholder=c_in,
                 similarity_all=sim_all,
-                pred_confidence=pred_confidence,
+                intent_prediction=intent_prediction,
+                tag_prediction=tag_prediction,
                 similarity=sim,
                 message_embed=message_embed,
+                cls_embed=cls_embed,
                 label_embed=label_embed,
                 all_labels_embed=all_labels_embed,
+                attention_weights=attention_weights,
             )
 
         else:

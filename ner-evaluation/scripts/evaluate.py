@@ -150,10 +150,13 @@ def write_config(
     f.close()
 
 
-def train_model(pipeline: List[Dict], data_train: TrainingData) -> Interpreter:
+def train_model(
+    pipeline: List[Dict], data_train: TrainingData, model_folder: Text
+) -> Text:
     config = RasaNLUModelConfig(configuration_values={"pipeline": pipeline})
     trainer = Trainer(config)
-    return trainer.train(data_train)
+    trainer.train(data_train)
+    return trainer.persist(model_folder)
 
 
 def evaluate_model(
@@ -197,6 +200,7 @@ def run(
     report_folder, report_file, result_file, configuration_file = create_output_files(
         data_set, result_folder, runs, train_frac, typo
     )
+    model_folder = os.path.join(report_folder, "model")
 
     accuracy_list = []
     f1_score_list = []
@@ -207,7 +211,8 @@ def run(
             data_path, train_frac=train_frac, typo=typo
         )
 
-        interpreter = train_model(pipeline, data_train)
+        path = train_model(pipeline, data_train, model_folder)
+        interpreter = Interpreter.load(path)
 
         result = evaluate_model(interpreter, data_test, report_folder)
 
