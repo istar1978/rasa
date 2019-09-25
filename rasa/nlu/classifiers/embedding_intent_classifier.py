@@ -89,7 +89,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         # how to create batches
         "batch_strategy": "balanced",  # string 'sequence' or 'balanced'
         # number of epochs
-        "epochs": 3,
+        "epochs": 25,
         # set random seed to any int to get reproducible results
         "random_seed": None,
         # embedding parameters
@@ -125,9 +125,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
         "evaluate_on_num_examples": 0,  # large values may hurt performance
         # model config
         # if true intent classification is trained and intent predicted
-        "intent_classification": True,
+        "intent_classification": False,
         # if true named entity recognition is trained and entities predicted
-        "named_entity_recognition": False,
+        "named_entity_recognition": True,
     }
     # end default properties (DOC MARKER - don't remove)
 
@@ -424,10 +424,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
         tags = []
 
         for e in training_data.training_examples:
-            self.max_seq_len = e.get(
-                MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE]
-            ).shape[0]
-            X.append(e.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE]))
+            features = e.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE])
+            self.max_seq_len = features.shape[0]
+            X.append(features)
             # every example should have an intent
             label_ids.append(label_id_dict[e.get(MESSAGE_INTENT_ATTRIBUTE)])
             _tags = []
@@ -487,10 +486,10 @@ class EmbeddingIntentClassifier(EntityExtractor):
         # transformer
         self.message_embed, mask = self._create_tf_sequence(self.a_in)
 
-        last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
-        last = tf.expand_dims(last, -1)
-
         if self.intent_classification:
+            last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
+            last = tf.expand_dims(last, -1)
+
             # get _cls_ vector for intent classification
             self.cls_embed = tf.reduce_sum(self.message_embed * last, 1)
 
@@ -534,14 +533,14 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
         if self.named_entity_recognition:
             # get sequence lengths for NER
-            mask = tf.cumsum(last, axis=1, reverse=True)
             sequence_lengths = tf.squeeze(tf.cast(tf.reduce_sum(mask, 1), tf.int32))
+            sequence_lengths.set_shape([mask.shape[0]])
 
             loss, crf_metrics = self._calculate_crf_loss(
                 self.message_embed, sequence_lengths, self.c_in
             )
 
-            metric = crf_metrics["f1"]
+            metric = crf_metrics["f1"][0]
 
         return loss, metric
 
@@ -568,7 +567,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         # Metrics
         weights = tf.sequence_mask(sequence_lengths, maxlen=self.max_seq_len)
         metrics = {
-            # "acc": tf.metrics.accuracy(c_in, pred_ids, weights),
+            "acc": tf.metrics.accuracy(tag_indices, pred_ids, weights),
             "precision": precision(
                 tag_indices, pred_ids, self.num_tags, pos_tag_indices, weights
             ),
@@ -628,11 +627,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
             a_in, mask, self.attention_weights, hparams, self.C2, self._is_training
         )
 
-        dial_embed = train_utils.create_tf_embed(
-            a, self.embed_dim, self.C2, self.similarity_type, layer_name_suffix="dial"
-        )
-
-        return dial_embed, mask
+        return a, mask
 
     def _build_tf_pred_graph(
         self, session_data: "train_utils.SessionData"
@@ -643,16 +638,14 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.b_in = tf.placeholder(
             tf.float32, (None, None, session_data.Y.shape[-1]), name="b"
         )
-        self.c_in = tf.placeholder(
-            tf.int64, (None, None, session_data.tags.shape[-1]), name="c"
-        )
+        self.c_in = tf.placeholder(tf.int64, (None, None, None), name="c")
 
         self.message_embed, mask = self._create_tf_sequence(self.a_in)
 
-        last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
-        last = tf.expand_dims(last, -1)
-
         if self.intent_classification:
+            last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
+            last = tf.expand_dims(last, -1)
+
             self.cls_embed = tf.reduce_sum(self.message_embed * last, 1)
             # reduce dimensionality as input should not be sequence for intent
             # classification
@@ -680,8 +673,12 @@ class EmbeddingIntentClassifier(EntityExtractor):
             )
 
         if self.named_entity_recognition:
+            # get sequence lengths for NER
+            sequence_lengths = tf.cast(tf.reduce_sum(mask, 1), tf.int32)
+
             # predict tags
-            _, _, self.tag_prediction = self._create_crf(self.message_embed, self.c_in)
+            _, _, pred_ids = self._create_crf(self.message_embed, sequence_lengths)
+            self.tag_prediction = tf.to_int64(pred_ids)
 
     def check_input_dimension_consistency(self, session_data):
         if self.share_hidden_layers:
@@ -757,15 +754,16 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
         session_data = self.preprocess_train_data(training_data)
 
-        # possible_to_train = self._check_enough_labels(session_data)
-        #
-        # if not possible_to_train:
-        #     logger.error(
-        #         "Can not train a classifier. "
-        #         "Need at least 2 different classes. "
-        #         "Skipping training of classifier."
-        #     )
-        #     return
+        if self.intent_classification:
+            possible_to_train = self._check_enough_labels(session_data)
+
+            if not possible_to_train:
+                logger.error(
+                    "Can not train a classifier. "
+                    "Need at least 2 different classes. "
+                    "Skipping training of classifier."
+                )
+                return
 
         if self.evaluate_on_num_examples:
             session_data, eval_session_data = train_utils.train_val_split(
@@ -841,16 +839,16 @@ class EmbeddingIntentClassifier(EntityExtractor):
         else:
             # get features (bag of words) for a message
             # noinspection PyPep8Naming
-            X = message.get(
-                MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE]
-            ).reshape(1, 1, -1)
+            X = [message.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE])]
+            X = np.array(X)
 
             # load tf graph and session
-            pred_ids = self.session.run(self.tag_prediction, feed_dict={self.a_in: X})
+            predictions = self.session.run(
+                self.tag_prediction, feed_dict={self.a_in: X}
+            )
 
-            predictions = [self.inverted_tag_dict[p] for p in tf.to_int64(pred_ids)]
+            tags = [self.inverted_tag_dict[p] for p in predictions[0]]
 
-            tags = predictions[0]
             entities = self._convert_tags_to_entities(
                 message.text, message.get("tokens", []), tags
             )
@@ -904,9 +902,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
         else:
             # get features (bag of words) for a message
             # noinspection PyPep8Naming
-            X = message.get(
-                MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE]
-            ).reshape(1, 1, -1)
+            X = [message.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE])]
+            X = np.array(X)
 
             # load tf graph and session
             label_ids, message_sim = self._calculate_message_sim(X)

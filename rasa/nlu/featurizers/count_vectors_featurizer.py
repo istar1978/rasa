@@ -549,17 +549,13 @@ class CountVectorsFeaturizer(Featurizer):
                 message, attribute=MESSAGE_TEXT_ATTRIBUTE
             )
 
-            bag = (
-                self.vectorizers[MESSAGE_TEXT_ATTRIBUTE]
-                .transform([message_text])
-                .toarray()
-                .squeeze()
-            )
+            features = self._create_sequence(MESSAGE_TEXT_ATTRIBUTE, [message_text])
+
             message.set(
                 MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE],
                 self._combine_with_existing_features(
                     message,
-                    bag,
+                    features[0],
                     feature_name=MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE],
                 ),
             )

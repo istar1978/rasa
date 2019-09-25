@@ -244,16 +244,16 @@ def create_tf_dataset(
         shape_Y = (None, None, session_data.Y[0].shape[-1])
 
     if session_data.tags[0].ndim == 1:
-        shape_tag_Y = (None, session_data.tags[0].shape[-1])
+        shape_tags = (None, None)
     else:
-        shape_tag_Y = (None, None, session_data.tags[0].shape[-1])
+        shape_tags = (None, None, None)
 
     return tf.data.Dataset.from_generator(
         lambda batch_size_: gen_batch(
             session_data, batch_size_, batch_strategy, shuffle
         ),
         output_types=(tf.float32, tf.float32, tf.int64),
-        output_shapes=(shape_X, shape_Y, shape_tag_Y),
+        output_shapes=(shape_X, shape_Y, shape_tags),
         args=([batch_size]),
     )
 
@@ -880,6 +880,7 @@ def train_tf_dataset(
     """Train tf graph"""
 
     session.run(tf.global_variables_initializer())
+    session.run(tf.local_variables_initializer())
 
     if evaluate_on_num_examples:
         logger.info(

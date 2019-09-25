@@ -12,14 +12,8 @@ from typing import Any, Dict, Optional, Text, List, Tuple
 from jsonpickle import json
 from six.moves import reduce
 import numpy as np
-from tensor2tensor.layers.common_attention import add_timing_signal_1d
-from tensor2tensor.models.transformer import (
-    transformer_small,
-    transformer_prepare_encoder,
-    transformer_encoder,
-)
+from tensor2tensor.models.transformer import transformer_small
 
-from nlu.constants import MESSAGE_VECTOR_FEATURE_NAMES, MESSAGE_TEXT_ATTRIBUTE
 from rasa.nlu.test import determine_token_labels
 from rasa.nlu.config import RasaNLUModelConfig
 from rasa.nlu.extractors import EntityExtractor
@@ -355,7 +349,6 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
 
         # Loss
         tags = self.vocab_tags.lookup(labels)
-
         log_likelihood, _ = tf.contrib.crf.crf_log_likelihood(
             logits, tags, self.nwords, crf_params
         )
