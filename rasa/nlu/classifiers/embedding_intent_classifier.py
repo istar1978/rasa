@@ -6,7 +6,7 @@ import typing
 from typing import Any, Dict, List, Optional, Text, Tuple
 import warnings
 
-from nlu.extractors import EntityExtractor
+from rasa.nlu.extractors import EntityExtractor
 from rasa.nlu.test import determine_token_labels
 from rasa.nlu.tokenizers import Token
 from rasa.nlu.classifiers import LABEL_RANKING_LENGTH
@@ -439,7 +439,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         label_ids = []
         tags = []
 
-        for e in training_data.training_examples:
+        for e in training_data.entity_examples:
             features = e.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE])
             if self.max_seq_len is None:
                 self.max_seq_len = features.shape[0]
@@ -728,12 +728,6 @@ class EmbeddingIntentClassifier(EntityExtractor):
         )
 
         self.inverted_tag_dict = {v: k for k, v in tag_id_dict.items()}
-        self._encoded_all_tag_ids = self._create_encoded_tag_ids(
-            training_data,
-            tag_id_dict,
-            attribute=MESSAGE_ENTITIES_ATTRIBUTE,
-            attribute_feature_name=MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE],
-        )
         self.num_tags = len(self.inverted_tag_dict)
 
         # check if number of negatives is less than number of label_ids

@@ -63,7 +63,7 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
         # batch siye
         "batch_size": 20,
         # number of epochs
-        "epochs": 5,
+        "epochs": 25,
         # the number of units in the LSTM cell
         "lstm_size": 20,
         # how often calculate validation metrics

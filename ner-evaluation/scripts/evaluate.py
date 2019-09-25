@@ -1,3 +1,5 @@
+import time
+
 import traceback
 import json
 import os
@@ -15,7 +17,6 @@ from rasa.nlu.training_data import TrainingData
 from rasa.nlu.training_data.loading import load_files
 from rasa.utils.common import set_log_level
 from rasa.utils.io import list_files
-
 
 DEFAULT_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "CRFEntityExtractor"}]
 
@@ -50,15 +51,25 @@ SPACY_NER_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "SpacyEntityExtr
 
 FLAIR_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "FlairEntityExtractor"}]
 
-TF_PIPELINE = [
+TF_LSTM_PIPELINE = [
     {"name": "WhitespaceTokenizer"},
-    {"name": "TensorflowCrfEntityExtractor"},
+    {"name": "TensorflowCrfEntityExtractor", "use_transformer": False, "epochs": 50},
+]
+
+TF_TRANSFORMER_PIPELINE = [
+    {"name": "WhitespaceTokenizer"},
+    {"name": "TensorflowCrfEntityExtractor", "use_transformer": True, "epochs": 50},
 ]
 
 COMBINED_PIPELINE = [
     {"name": "WhitespaceTokenizer"},
     {"name": "CountVectorsFeaturizer"},
-    {"name": "EmbeddingIntentClassifier"},
+    {
+        "name": "EmbeddingIntentClassifier",
+        "epochs": 25,
+        "named_entity_recognition": True,
+        "intent_classification": False,
+    },
 ]
 
 
@@ -211,10 +222,16 @@ def run(
             data_path, train_frac=train_frac, typo=typo
         )
 
+        start = time.time()
         path = train_model(pipeline, data_train, model_folder)
+        end = time.time()
+        print ("Training done ({} sec).".format(end - start))
         interpreter = Interpreter.load(path)
 
+        start = time.time()
         result = evaluate_model(interpreter, data_test, report_folder)
+        end = time.time()
+        print ("Evaluation done ({} sec).".format(end - start))
 
         report = result["report"]
         accuracy_list.append(result["accuracy"])
@@ -230,6 +247,9 @@ def run(
     write_results(result_file, accuracy, f1_score, precision)
     write_config(configuration_file, runs, train_frac, pipeline)
 
+    print ("F1-Score: {}".format(f1_score))
+    print ("Precision: {}".format(precision))
+    print ("Accuracy: {}".format(accuracy))
     print (
         "Done evaluating pipeline '{}' on dataset '{}'. Results written to '{}'.".format(
             pipeline_name, data_path, report_folder
@@ -251,10 +271,11 @@ if __name__ == "__main__":
             "default-spacy",
             "spacy",
             "flair",
-            "tensorflow",
+            "tf-lstm",
+            "tf-transformer",
             "combined",
         ],
-        default="combined",
+        default="default",
         help="pipeline to evaluate",
     )
     parser.add_argument("--typo", action="store_true", help="use typo dataset")
@@ -273,7 +294,8 @@ if __name__ == "__main__":
         "default-spacy": (SPACY_PIPELINE, "default_spacy_pipeline"),
         "spacy": (SPACY_NER_PIPELINE, "spacy_pipeline"),
         "flair": (FLAIR_PIPELINE, "flair_pipeline"),
-        "tensorflow": (TF_PIPELINE, "tf_pipeline"),
+        "tf-lstm": (TF_LSTM_PIPELINE, "tf_lstm_pipeline"),
+        "tf-transformer": (TF_TRANSFORMER_PIPELINE, "tf_transformer_pipeline"),
         "combined": (COMBINED_PIPELINE, "combined_pipeline"),
     }
 

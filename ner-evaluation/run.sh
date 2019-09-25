@@ -1,30 +1,21 @@
 DATA_FOLDERS=(
-  "data/AddToPlaylist"
-  "data/BookRestaurant"
-  "data/GetWeather"
-  "data/RateBook"
-  "data/SearchCreativeWork"
-  "data/SearchScreeningEvent"
+  "data/CCPE"
   "data/BTC"
-  "data/re3d"
   "data/WNUT17"
-  "data/Ritter"
 )
 PIPELINES=(
-  "default"
-  "default-spacy"
-  "spacy"
-  "flair"
+  "combined"
+  #"tf-lstm"
+  #"tf-transformer"
 )
 TYPO=(
-  "yes"
   "no"
+#  "yes"
 )
 TRAIN_FRAC=(
-  "0.5"
   "0.8"
 )
-RUNS=5
+RUNS=3
 OUTPUT="results"
 REPORTING="no"
 
@@ -72,9 +63,9 @@ do
                     echo "Experiment $CURRENT_EXPERIMENT/$NUMBER_OF_EXPERIMENTS on $data_folder is running."
 
                     if [[ "$typo" == "yes" ]]; then
-                        python scripts/evaluate.py --typo --output $OUTPUT --runs $RUNS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER &>> $LOG_FILE
+                        python scripts/evaluate.py --typo --output $OUTPUT --runs $RUNS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER > $LOG_FILE
                     else
-                        python scripts/evaluate.py --output $OUTPUT --runs $RUNS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER &>> $LOG_FILE
+                        python scripts/evaluate.py --output $OUTPUT --runs $RUNS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER > $LOG_FILE
                     fi
 
                     if [ $? -ne 0 ]; then

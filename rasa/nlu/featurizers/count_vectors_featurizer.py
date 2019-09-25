@@ -71,8 +71,6 @@ class CountVectorsFeaturizer(Featurizer):
         "max_ngram": 1,  # int
         # limit vocabulary size
         "max_features": None,  # int or None
-        # max sequence length determined during training
-        "max_seq_len": None,  # int or None
         # if convert all characters to lowercase
         "lowercase": True,  # bool
         # handling Out-Of-Vacabulary (OOV) words
@@ -118,9 +116,6 @@ class CountVectorsFeaturizer(Featurizer):
 
         # if convert all characters to lowercase
         self.lowercase = self.component_config["lowercase"]
-
-        # max seq length determined during training
-        self.max_seq_len = self.component_config["max_seq_len"]
 
     # noinspection PyPep8Naming
     def _load_OOV_params(self):
@@ -491,11 +486,10 @@ class CountVectorsFeaturizer(Featurizer):
 
         texts = [self._get_text_sequence(text) for text in attribute_texts]
 
-        if self.max_seq_len is None:
-            self.max_seq_len = max([len(tokens) for tokens in texts])
+        max_seq_len = max([len(tokens) for tokens in texts])
 
         num_exs = len(texts)
-        X = np.ones([num_exs, self.max_seq_len, feature_len], dtype=np.int32) * -1
+        X = np.ones([num_exs, max_seq_len, feature_len], dtype=np.int32) * -1
 
         for i, tokens in enumerate(texts):
             x = self.vectorizers[attribute].transform(tokens)
@@ -594,10 +588,7 @@ class CountVectorsFeaturizer(Featurizer):
                 else:
                     vocab = attribute_vocabularies
 
-                utils.json_pickle(
-                    featurizer_file,
-                    {"vocabulary": vocab, "max_seq_len": self.max_seq_len},
-                )
+                utils.json_pickle(featurizer_file, vocab)
 
         return {"file": file_name}
 
@@ -615,10 +606,7 @@ class CountVectorsFeaturizer(Featurizer):
         featurizer_file = os.path.join(model_dir, file_name)
 
         if os.path.exists(featurizer_file):
-            data = utils.json_unpickle(featurizer_file)
-
-            vocabulary = data["vocabulary"]
-            meta["max_seq_len"] = data["max_seq_len"]
+            vocabulary = utils.json_unpickle(featurizer_file)
 
             share_vocabulary = meta["use_shared_vocab"]
 
