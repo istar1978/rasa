@@ -45,7 +45,7 @@ class TensorflowCrfEntityExtractor(EntityExtractor):
     # default properties (DOC MARKER - don't remove)
     defaults = {
         # file to word embeddings in numpy format
-        "word_embeddings_file": "/Users/tabergma/Repositories/tf_ner/data/example/WNUT17/glove.npz",
+        "word_embeddings_file": None,
         # dimension of char embeddings
         "dim_chars": 100,
         # dimension of word embeddings

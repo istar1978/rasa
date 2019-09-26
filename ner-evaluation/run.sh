@@ -2,11 +2,12 @@ DATA_FOLDERS=(
   "data/CCPE"
   "data/BTC"
   "data/WNUT17"
+  "data/Ritter"
 )
 PIPELINES=(
   "combined"
-  #"tf-lstm"
-  #"tf-transformer"
+  "tf-lstm"
+  "tf-transformer"
 )
 TYPO=(
   "no"
@@ -18,6 +19,7 @@ TRAIN_FRAC=(
 RUNS=3
 OUTPUT="results"
 REPORTING="no"
+EPOCHS=50
 
 LOG_FOLDER="logs"
 if [ -d "$LOG_FOLDER" ]; then
@@ -63,9 +65,9 @@ do
                     echo "Experiment $CURRENT_EXPERIMENT/$NUMBER_OF_EXPERIMENTS on $data_folder is running."
 
                     if [[ "$typo" == "yes" ]]; then
-                        python scripts/evaluate.py --typo --output $OUTPUT --runs $RUNS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER > $LOG_FILE
+                        python scripts/evaluate.py --typo --output $OUTPUT --runs $RUNS --epochs $EPOCHS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER > $LOG_FILE
                     else
-                        python scripts/evaluate.py --output $OUTPUT --runs $RUNS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER > $LOG_FILE
+                        python scripts/evaluate.py --output $OUTPUT --runs $RUNS --epochs $EPOCHS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER > $LOG_FILE
                     fi
 
                     if [ $? -ne 0 ]; then

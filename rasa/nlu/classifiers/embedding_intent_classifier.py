@@ -439,7 +439,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         label_ids = []
         tags = []
 
-        for e in training_data.entity_examples:
+        for e in training_data.training_examples:
             features = e.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE])
             if self.max_seq_len is None:
                 self.max_seq_len = features.shape[0]
@@ -550,14 +550,16 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
         if self.named_entity_recognition:
             # get sequence lengths for NER
-            sequence_lengths = tf.squeeze(tf.cast(tf.reduce_sum(mask, 1), tf.int32))
+            sequence_lengths = tf.cast(tf.reduce_sum(mask, 1), tf.int32)
+            if len(sequence_lengths.shape) > 1:
+                sequence_lengths = tf.squeeze(sequence_lengths)
             sequence_lengths.set_shape([mask.shape[0]])
 
             loss, crf_metrics = self._calculate_crf_loss(
                 self.message_embed, sequence_lengths, self.c_in
             )
 
-            metric = crf_metrics["f1"][0]
+            metric = crf_metrics["acc"][0]
 
         return loss, metric
 

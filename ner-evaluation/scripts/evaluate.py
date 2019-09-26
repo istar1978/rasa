@@ -53,12 +53,22 @@ FLAIR_PIPELINE = [{"name": "WhitespaceTokenizer"}, {"name": "FlairEntityExtracto
 
 TF_LSTM_PIPELINE = [
     {"name": "WhitespaceTokenizer"},
-    {"name": "TensorflowCrfEntityExtractor", "use_transformer": False, "epochs": 50},
+    {
+        "name": "TensorflowCrfEntityExtractor",
+        "use_transformer": False,
+        "epochs": 50,
+        "word_embeddings_file": "",
+    },
 ]
 
 TF_TRANSFORMER_PIPELINE = [
     {"name": "WhitespaceTokenizer"},
-    {"name": "TensorflowCrfEntityExtractor", "use_transformer": True, "epochs": 50},
+    {
+        "name": "TensorflowCrfEntityExtractor",
+        "use_transformer": True,
+        "epochs": 50,
+        "word_embeddings_file": "",
+    },
 ]
 
 COMBINED_PIPELINE = [
@@ -66,7 +76,7 @@ COMBINED_PIPELINE = [
     {"name": "CountVectorsFeaturizer"},
     {
         "name": "EmbeddingIntentClassifier",
-        "epochs": 25,
+        "epochs": 50,
         "named_entity_recognition": True,
         "intent_classification": False,
     },
@@ -262,7 +272,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Named-Entity-Recognition Evaluation")
     parser.add_argument("data", type=str, help="path to dataset folder")
-    parser.add_argument("--output", type=str, default="local", help="output folder")
+    parser.add_argument("--output", type=str, default="results", help="output folder")
     parser.add_argument(
         "--pipeline",
         type=str,
@@ -285,7 +295,8 @@ if __name__ == "__main__":
         default=0.8,
         help="percentage of training datset examples",
     )
-    parser.add_argument("--runs", type=int, default=1, help="number of runs")
+    parser.add_argument("--runs", type=int, default=3, help="number of runs")
+    parser.add_argument("--epochs", type=int, default=50, help="number of runs")
 
     args = parser.parse_args()
 
@@ -301,6 +312,21 @@ if __name__ == "__main__":
 
     pipeline = pipelines[args.pipeline][0]
     pipeline_name = pipelines[args.pipeline][1]
+
+    glove_embeddings = {
+        "WNUT17": "/Users/tabergma/Repositories/tf_ner/data/example/WNUT17/glove.npz",
+        "Ritter": "/Users/tabergma/Repositories/tf_ner/data/example/Ritter/glove.npz",
+    }
+
+    if args.pipeline == "tf-lstm" or args.pipeline == "tf-transformer":
+        data_dir = os.path.basename(args.data)
+        if data_dir not in glove_embeddings:
+            print ("ERROR: No glove embedding file for dataset '{}'.".format(data_dir))
+            exit(0)
+        pipeline[-1]["word_embeddings_file"] = glove_embeddings[data_dir]
+
+    if args.pipeline in ["tf-lstm", "tf-transformer", "combined"]:
+        pipeline[-1]["epochs"] = args.epochs
 
     run(
         args.data,
