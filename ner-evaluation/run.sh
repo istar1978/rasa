@@ -2,7 +2,6 @@ DATA_FOLDERS=(
   "data/CCPE"
   "data/BTC"
   "data/WNUT17"
-  "data/Ritter"
 )
 PIPELINES=(
   "combined"
@@ -16,7 +15,7 @@ TYPO=(
 TRAIN_FRAC=(
   "0.8"
 )
-RUNS=1
+RUNS=2
 OUTPUT="results"
 REPORTING="no"
 EPOCHS=50
