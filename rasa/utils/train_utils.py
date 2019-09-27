@@ -220,7 +220,9 @@ def gen_batch(
 
         batch_x_sparse = session_data.X[start:end]
         batch_y_sparse = session_data.Y[start:end]
-        batch_y_tag = session_data.tags[start:end]
+        batch_tags = session_data.tags[start:end]
+
+        batch_size = min(len(batch_x_sparse), batch_size)
 
         feature_len_x = session_data.X[0].shape[-1]
         feature_len_y = session_data.Y[0].shape[-1]
@@ -228,11 +230,11 @@ def gen_batch(
         batch_x = np.ones([batch_size, max_seq_len, feature_len_x], dtype=np.int32) * -1
         batch_y = np.ones([batch_size, max_seq_len, feature_len_y], dtype=np.int32) * -1
 
-        for i in range(len(batch_x_sparse)):
+        for i in range(batch_size):
             batch_x[i, : batch_x_sparse[i].shape[0], :] = batch_x_sparse[i].toarray()
             batch_y[i, : batch_y_sparse[i].shape[0], :] = batch_y_sparse[i].toarray()
 
-        yield batch_x, batch_y, batch_y_tag
+        yield batch_x, batch_y, batch_tags
 
 
 # noinspection PyPep8Naming
