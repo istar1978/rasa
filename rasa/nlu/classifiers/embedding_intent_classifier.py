@@ -433,19 +433,23 @@ class EmbeddingIntentClassifier(EntityExtractor):
         tag_id_dict: Dict[Text, int],
     ) -> "train_utils.SessionData":
         """Prepare data for training and create a SessionData object"""
-
         X = []
         Y = []
         label_ids = []
         tags = []
+        max_len = 0
 
         for e in training_data.training_examples:
             features = e.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE])
-            if self.max_seq_len is None:
-                self.max_seq_len = features.shape[0]
             X.append(features)
             # every example should have an intent
             label_ids.append(label_id_dict[e.get(MESSAGE_INTENT_ATTRIBUTE)])
+            if len(e.get("tokens", [])) > max_len:
+                max_len = len(e.get("tokens", []))
+
+        self.max_seq_len = max_len
+
+        for e in training_data.training_examples:
             _tags = []
             for i in range(self.max_seq_len):
                 if i < len(e.get("tokens")):
@@ -652,12 +656,12 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self, session_data: "train_utils.SessionData"
     ) -> "tf.Tensor":
         self.a_in = tf.placeholder(
-            tf.float32, (None, None, session_data.X.shape[-1]), name="a"
+            tf.float32, (None, None, session_data.X[0].shape[-1]), name="a"
         )
         self.b_in = tf.placeholder(
-            tf.float32, (None, None, session_data.Y.shape[-1]), name="b"
+            tf.float32, (None, None, session_data.Y[0].shape[-1]), name="b"
         )
-        self.c_in = tf.placeholder(tf.int64, (None, None, None), name="c")
+        self.c_in = tf.placeholder(tf.int64, (None, None), name="c")
 
         self.message_embed, mask = self._create_tf_sequence(self.a_in)
 
@@ -787,8 +791,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
         self.graph = tf.Graph()
         with self.graph.as_default():
-            # set random seed
-            tf.set_random_seed(self.random_seed)
+            # set numpy random seed
+            np.random.seed(self.random_seed)
 
             # allows increasing batch size
             batch_size_in = tf.placeholder(tf.int64)
@@ -798,7 +802,11 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 train_init_op,
                 eval_init_op,
             ) = train_utils.create_iterator_init_datasets(
-                session_data, eval_session_data, batch_size_in, self.batch_strategy
+                session_data,
+                eval_session_data,
+                batch_size_in,
+                self.batch_strategy,
+                self.max_seq_len,
             )
 
             self._is_training = tf.placeholder_with_default(False, shape=())
@@ -856,8 +864,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
         else:
             # get features (bag of words) for a message
             # noinspection PyPep8Naming
-            X = [message.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE])]
-            X = np.array(X)
+            X_sparse = message.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE])
+            X = X_sparse.toarray()
+            X = np.expand_dims(X, axis=0)
 
             # load tf graph and session
             predictions = self.session.run(

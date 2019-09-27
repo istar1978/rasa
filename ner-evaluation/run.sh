@@ -16,7 +16,7 @@ TYPO=(
 TRAIN_FRAC=(
   "0.8"
 )
-RUNS=3
+RUNS=1
 OUTPUT="results"
 REPORTING="no"
 EPOCHS=50

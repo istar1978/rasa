@@ -302,13 +302,10 @@ class CountVectorsFeaturizer(Featurizer):
             )
 
     def _set_attribute_features(
-        self,
-        attribute: Text,
-        attribute_features: np.ndarray,
-        training_data: "TrainingData",
+        self, attribute: Text, attribute_features: List, training_data: "TrainingData"
     ):
         """Set computed features of the attribute to corresponding message objects"""
-        for i, example in enumerate(training_data.intent_examples):
+        for i, example in enumerate(training_data.training_examples):
             # create bag for each example
             example.set(
                 MESSAGE_VECTOR_FEATURE_NAMES[attribute],
@@ -328,7 +325,7 @@ class CountVectorsFeaturizer(Featurizer):
         for attribute in MESSAGE_ATTRIBUTES:
             attribute_texts = [
                 self._get_message_text_by_attribute(example, attribute)
-                for example in training_data.intent_examples
+                for example in training_data.training_examples
             ]
             self._check_OOV_present(attribute_texts)
             processed_attribute_texts[attribute] = attribute_texts
@@ -467,13 +464,12 @@ class CountVectorsFeaturizer(Featurizer):
 
     def _get_featurized_attribute(
         self, attribute: Text, attribute_texts: List[Text]
-    ) -> Optional[np.ndarray]:
+    ) -> Optional[List]:
         """Return features of a particular attribute for complete data"""
 
         if self._check_attribute_vocabulary(attribute):
             # count vectorizer was trained
-            featurized_attributes = self._create_sequence(attribute, attribute_texts)
-            return featurized_attributes
+            return self._create_sequence(attribute, attribute_texts)
         else:
             return None
 
@@ -481,20 +477,15 @@ class CountVectorsFeaturizer(Featurizer):
     def _get_text_sequence(text):
         return text.split()
 
-    def _create_sequence(self, attribute: Text, attribute_texts: List[Text]):
-        feature_len = len(self.vectorizers[attribute].vocabulary_.keys())
-
+    def _create_sequence(self, attribute: Text, attribute_texts: List[Text]) -> List:
         texts = [self._get_text_sequence(text) for text in attribute_texts]
 
-        max_seq_len = max([len(tokens) for tokens in texts])
-
-        num_exs = len(texts)
-        X = np.ones([num_exs, max_seq_len, feature_len], dtype=np.int32) * -1
+        X = []
 
         for i, tokens in enumerate(texts):
             x = self.vectorizers[attribute].transform(tokens)
             x.sort_indices()
-            X[i, : x.shape[0], :] = x.toarray()
+            X.append(x)
 
         return X
 
