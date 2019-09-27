@@ -31,13 +31,13 @@ for data_folder in "${DATA_FOLDERS[@]}";
 do
     LOCAL_DATA_FOLDER="tmp/$data_folder"
 
-    LOG_FILE="$LOG_FOLDER/$(basename $data_folder).txt"
+    NUMBER_OF_EXPERIMENTS=$((${#PIPELINES[@]} * ${#TYPO[@]} * ${#TRAIN_FRAC[@]}))
+    CURRENT_EXPERIMENT=1
+
+    LOG_FILE="$LOG_FOLDER/$(basename $data_folder)_$CURRENT_EXPERIMENT.txt"
     if [ -f "$LOG_FILE" ]; then
         rm $LOG_FILE
     fi
-
-    NUMBER_OF_EXPERIMENTS=$((${#PIPELINES[@]} * ${#TYPO[@]} * ${#TRAIN_FRAC[@]}))
-    CURRENT_EXPERIMENT=0
 
     # report start of evaluation
     if [[ "$REPORTING" == "yes" ]]; then
