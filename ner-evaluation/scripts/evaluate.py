@@ -10,6 +10,7 @@ from rasa.nlu.test import (
     get_entity_extractors,
     evaluate_entities,
     remove_pretrained_extractors,
+    evaluate_intents,
 )
 from rasa.nlu.model import Trainer, Interpreter
 from rasa.nlu.config import RasaNLUModelConfig
@@ -72,11 +73,18 @@ TF_TRANSFORMER_PIPELINE = [
 ]
 
 COMBINED_PIPELINE = [
-    {"name": "WhitespaceTokenizer"},
-    {"name": "CountVectorsFeaturizer"},
+    {"name": "WhitespaceTokenizer", "add_class_label": True},
+    {
+        "name": "CountVectorsFeaturizer",
+        "use_flair": False,
+        "analyzer": "char_wb",
+        "min_ngram": 1,
+        "max_ngram": 5,
+    },
     {
         "name": "EmbeddingIntentClassifier",
         "epochs": 50,
+        "unidirectional_encoder": False,
         "named_entity_recognition": True,
         "intent_classification": False,
     },
@@ -95,9 +103,9 @@ def load_training_data(
     else:
         files = [f for f in files if not os.path.basename(f).startswith("typo_")]
 
-    train_test_split = [os.path.basename(f) == "test.md" for f in files].count(
-        True
-    ) == 1
+    train_test_split = [
+        os.path.basename(f) in ["test.md", "test.json"] for f in files
+    ].count(True) == 1
 
     if train_test_split:
         data_train = load_files([f for f in files if "train" in f])
@@ -182,12 +190,12 @@ def train_model(
 
 def evaluate_model(
     interpreter: Interpreter, test_data: TrainingData, result_folder: Text
-) -> Dict:
+) -> Tuple[Dict, Text]:
     interpreter.pipeline = remove_pretrained_extractors(interpreter.pipeline)
 
-    result = {"entity_evaluation": None}
+    result = {"entity_evaluation": None, "intent_evaluation": None}
 
-    _, _, entity_results = get_eval_data(interpreter, test_data)
+    intent_results, _, entity_results = get_eval_data(interpreter, test_data)
 
     extractors = get_entity_extractors(interpreter)
 
@@ -196,7 +204,17 @@ def evaluate_model(
             entity_results, extractors, output_directory=result_folder, errors=True
         )
 
-    return result["entity_evaluation"][extractors.pop()]
+    if intent_results:
+        result["intent_evaluation"] = evaluate_intents(
+            intent_results,
+            output_directory=result_folder,
+            errors=True,
+            successes=True,
+            confmat_filename="confmat.png",
+            intent_hist_filename="hist.png",
+        )
+
+    return result, extractors.pop()
 
 
 def run(
@@ -239,16 +257,15 @@ def run(
         interpreter = Interpreter.load(path)
 
         start = time.time()
-        result = evaluate_model(interpreter, data_test, report_folder)
+        result, extractor_name = evaluate_model(interpreter, data_test, report_folder)
         end = time.time()
         print ("Evaluation done ({} sec).".format(end - start))
 
-        report = result["report"]
-        accuracy_list.append(result["accuracy"])
-        f1_score_list.append(result["f1_score"])
-        precision_list.append(result["precision"])
+        accuracy_list.append(result["entity_evaluation"][extractor_name]["accuracy"])
+        f1_score_list.append(result["entity_evaluation"][extractor_name]["f1_score"])
+        precision_list.append(result["entity_evaluation"][extractor_name]["precision"])
 
-        add_to_report(report_file, i, report)
+        add_to_report(report_file, i, result)
 
     accuracy = sum(accuracy_list) / len(accuracy_list)
     precision = sum(precision_list) / len(precision_list)

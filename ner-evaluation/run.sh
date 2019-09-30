@@ -1,12 +1,15 @@
 DATA_FOLDERS=(
-  "data/CCPE"
-  "data/BTC"
-  "data/WNUT17"
+  "data/AddToPlaylist"
+  "data/BookRestaurant"
+  "data/GetWeather"
+  "data/RateBook"
+  "SearchCreativeWork"
+  "SearchScreeningEvent"
 )
 PIPELINES=(
   "combined"
-  "tf-lstm"
-  "tf-transformer"
+#  "tf-lstm"
+#  "tf-transformer"
 )
 TYPO=(
   "no"
