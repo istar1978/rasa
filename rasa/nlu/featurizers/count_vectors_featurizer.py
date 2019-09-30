@@ -2,6 +2,10 @@ import logging
 import os
 import re
 from typing import Any, Dict, List, Optional, Text
+
+from flair.data import Sentence
+from flair.embeddings import WordEmbeddings, FlairEmbeddings, StackedEmbeddings
+from scipy.sparse import csr_matrix, hstack
 import numpy as np
 
 from sklearn.feature_extraction.text import CountVectorizer
@@ -77,6 +81,8 @@ class CountVectorsFeaturizer(Featurizer):
         # will be converted to lowercase if lowercase is True
         "OOV_token": None,  # string or None
         "OOV_words": [],  # string or list of strings
+        # add embeddings from flair library
+        "use_flair": False,
     }
 
     @classmethod
@@ -116,6 +122,8 @@ class CountVectorsFeaturizer(Featurizer):
 
         # if convert all characters to lowercase
         self.lowercase = self.component_config["lowercase"]
+
+        self.use_flair = self.component_config["use_flair"]
 
     # noinspection PyPep8Naming
     def _load_OOV_params(self):
@@ -485,9 +493,31 @@ class CountVectorsFeaturizer(Featurizer):
         for i, tokens in enumerate(texts):
             x = self.vectorizers[attribute].transform(tokens)
             x.sort_indices()
+            x = self.add_flair_embeddings(tokens, x)
             X.append(x)
 
         return X
+
+    def add_flair_embeddings(self, tokens: List[Text], x: csr_matrix):
+        if self.use_flair:
+            glove_embedding = WordEmbeddings("glove")
+            flair_embedding_forward = FlairEmbeddings("news-forward")
+            flair_embedding_backward = FlairEmbeddings("news-backward")
+            stacked_embeddings = StackedEmbeddings(
+                [glove_embedding, flair_embedding_forward, flair_embedding_backward]
+            )
+
+            sentence = Sentence(" ".join(tokens), use_tokenizer=False)
+
+            stacked_embeddings.embed(sentence)
+
+            y = csr_matrix([t.embedding.numpy() for t in sentence])
+            y.sort_indices()
+
+            if x.shape[0] == y.shape[0]:
+                x = hstack([x, y])
+
+        return x
 
     def train(
         self, training_data: TrainingData, cfg: RasaNLUModelConfig = None, **kwargs: Any

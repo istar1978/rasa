@@ -121,6 +121,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
         "C_emb": 0.8,
         # dropout rate for rnn
         "droprate": 0.2,
+        # use a unidirectional or bidirectional encoder
+        "unidirectional_encoder": True,
         # visualization of accuracy
         # how often to calculate training accuracy
         "evaluate_every_num_epochs": 20,  # small values may hurt performance
@@ -236,6 +238,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.pos_encoding = self.component_config["pos_encoding"]
         self.max_seq_length = self.component_config["max_seq_length"]
         self.max_seq_len = self.component_config["max_seq_len"]
+        self.unidirectional_encoder = self.component_config["unidirectional_encoder"]
 
     def _load_embedding_params(self, config: Dict[Text, Any]) -> None:
         self.embed_dim = config["embed_dim"]
@@ -651,6 +654,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
             self.pos_encoding,
             self.max_seq_length,
             self._is_training,
+            self.unidirectional_encoder,
         )
 
         a = train_utils.create_t2t_transformer_encoder(

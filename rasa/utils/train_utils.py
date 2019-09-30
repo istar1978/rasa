@@ -385,6 +385,7 @@ def create_t2t_hparams(
     pos_encoding: Text,
     max_seq_length: int,
     is_training: "tf.Tensor",
+    unidirectional_encoder: bool = True,
 ) -> "HParams":
     """Create parameters for t2t transformer."""
 
@@ -400,7 +401,7 @@ def create_t2t_hparams(
 
     hparams.max_length = max_seq_length
 
-    hparams.unidirectional_encoder = True
+    hparams.unidirectional_encoder = unidirectional_encoder
 
     hparams.self_attention_type = "dot_product_relative_v2"
     hparams.max_relative_position = 5
