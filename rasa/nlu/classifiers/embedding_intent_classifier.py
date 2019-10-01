@@ -533,6 +533,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
             # reduce dimensionality as input should not be sequence for intent
             # classification
+            # TODO check if b_in is correctly encoded
             self.b_in = tf.reduce_sum(self.b_in, 1)
             all_label_ids = tf.reduce_sum(all_label_ids, 1)
 
@@ -578,6 +579,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
             ner_metric = crf_metrics["acc"][0]
 
+        # TODO
         return intent_loss + ner_loss, intent_metric # (intent_metric + ner_metric) / 2
 
     def _calculate_crf_loss(
@@ -775,17 +777,21 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
         self.check_input_dimension_consistency(session_data)
 
+        # TODO
+        #  ideally do not use max_seq_len but max length of label seq
+        #  should have the same dimensionality as b_in
+        #  pad with zeros instead of -1 as we are summing up dim 1
+
         labels_sparse = self._encoded_all_label_ids
         labels = (
-            np.ones(
+            np.zeros(
                 [
                     len(labels_sparse),
-                    labels_sparse[0].shape[0],
+                    self.max_seq_len,
                     labels_sparse[0].shape[-1],
                 ],
                 dtype=np.int32,
             )
-            * -1
         )
         for i in range(len(labels_sparse)):
             labels[i, : labels_sparse[i].shape[0], :] = labels_sparse[i].toarray()
@@ -1084,6 +1090,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
             graph = tf.Graph()
             with graph.as_default():
                 session = tf.Session(config=_tf_config)
+
                 saver = tf.train.import_meta_graph(checkpoint + ".meta")
 
                 saver.restore(session, checkpoint)

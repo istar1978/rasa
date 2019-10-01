@@ -228,7 +228,7 @@ def gen_batch(
         feature_len_y = session_data.Y[0].shape[-1]
 
         batch_x = np.ones([batch_size, max_seq_len, feature_len_x], dtype=np.int32) * -1
-        batch_y = np.ones([batch_size, max_seq_len, feature_len_y], dtype=np.int32) * -1
+        batch_y = np.zeros([batch_size, max_seq_len, feature_len_y], dtype=np.int32)
 
         for i in range(batch_size):
             batch_x[i, : batch_x_sparse[i].shape[0], :] = batch_x_sparse[i].toarray()

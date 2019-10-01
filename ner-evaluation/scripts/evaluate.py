@@ -85,7 +85,7 @@ COMBINED_PIPELINE = [
         "name": "EmbeddingIntentClassifier",
         "epochs": 5,
         "unidirectional_encoder": False,
-        "named_entity_recognition": False,
+        "named_entity_recognition": True,
         "intent_classification": True,
     },
 ]
