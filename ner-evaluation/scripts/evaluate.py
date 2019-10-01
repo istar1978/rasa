@@ -77,16 +77,16 @@ COMBINED_PIPELINE = [
     {
         "name": "CountVectorsFeaturizer",
         "use_flair": False,
-        "analyzer": "char_wb",
+        "analyzer": "word",
         "min_ngram": 1,
-        "max_ngram": 5,
+        "max_ngram": 1,
     },
     {
         "name": "EmbeddingIntentClassifier",
-        "epochs": 50,
+        "epochs": 5,
         "unidirectional_encoder": False,
-        "named_entity_recognition": True,
-        "intent_classification": False,
+        "named_entity_recognition": False,
+        "intent_classification": True,
     },
 ]
 
@@ -251,7 +251,8 @@ def run(
         )
 
         start = time.time()
-        path = train_model(pipeline, data_train, model_folder)
+        # TODO test data
+        path = train_model(pipeline, data_test, model_folder)
         end = time.time()
         print ("Training done ({} sec).".format(end - start))
         interpreter = Interpreter.load(path)

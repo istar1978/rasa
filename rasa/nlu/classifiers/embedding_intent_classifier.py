@@ -3,6 +3,7 @@ import numpy as np
 import os
 import pickle
 import typing
+from scipy.sparse import csr_matrix
 from typing import Any, Dict, List, Optional, Text, Tuple
 import warnings
 
@@ -397,7 +398,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 labels_example, attribute_feature_name
             )
         else:
-            encoded_id_labels = self._compute_default_label_features(labels_example)
+            features = self._compute_default_label_features(labels_example)
+            encoded_id_labels = [csr_matrix(f) for f in features]
+            encoded_id_labels = np.array(encoded_id_labels)
 
         return encoded_id_labels
 
@@ -505,7 +508,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         """Bulid train graph using iterator."""
         self.a_in, self.b_in, self.c_in = self._iterator.get_next()
 
-        intent_loss = intent_metric = ner_loss = ner_metric = 0.0
+        intent_loss = intent_metric = ner_loss = ner_metric = tf.constant(0.0)
 
         # transformer
         self.message_embed, mask = self._create_tf_sequence(self.a_in)
@@ -515,14 +518,14 @@ class EmbeddingIntentClassifier(EntityExtractor):
             last = tf.expand_dims(last, -1)
 
             # get _cls_ vector for intent classification
+            self.cls_embed = tf.reduce_sum(self.message_embed * last, 1)
             self.cls_embed = train_utils.create_tf_embed(
-                self.message_embed,
+                self.cls_embed,
                 self.embed_dim,
                 self.C2,
                 self.similarity_type,
                 layer_name_suffix="a",
             )
-            self.cls_embed = tf.reduce_sum(self.cls_embed * last, 1)
 
             all_label_ids = tf.constant(
                 self._encoded_all_label_ids, dtype=tf.float32, name="all_labels_raw"
@@ -575,7 +578,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
             ner_metric = crf_metrics["acc"][0]
 
-        return intent_loss + ner_loss, (intent_metric + ner_metric) / 2
+        return intent_loss + ner_loss, intent_metric # (intent_metric + ner_metric) / 2
 
     def _calculate_crf_loss(
         self, inputs: tf.Tensor, sequence_lengths: tf.Tensor, tag_indices: tf.Tensor
@@ -681,14 +684,14 @@ class EmbeddingIntentClassifier(EntityExtractor):
             last = tf.expand_dims(last, -1)
 
             # get _cls_ embedding
+            self.cls_embed = tf.reduce_sum(self.message_embed * last, 1)
             self.cls_embed = train_utils.create_tf_embed(
-                self.message_embed,
+                self.cls_embed,
                 self.embed_dim,
                 self.C2,
                 self.similarity_type,
                 layer_name_suffix="a",
             )
-            self.cls_embed = tf.reduce_sum(self.cls_embed * last, 1)
 
             # reduce dimensionality as input should not be sequence for intent
             # classification

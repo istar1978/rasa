@@ -940,7 +940,6 @@ def get_eval_data(
                     result.get("text", ""),
                 )
             )
-
     return intent_results, response_selection_results, entity_results
 
 

@@ -282,12 +282,13 @@ def create_iterator_init_datasets(
 ) -> Tuple["tf.data.Iterator", "tf.Operation", "tf.Operation"]:
     """Create iterator and init datasets."""
 
+    # TODO shuffle True
     train_dataset = create_tf_dataset(
         session_data,
         batch_size,
         max_seq_len,
         batch_strategy=batch_strategy,
-        shuffle=True,
+        shuffle=False,
     )
 
     iterator = tf.data.Iterator.from_structure(
@@ -300,7 +301,7 @@ def create_iterator_init_datasets(
 
     if eval_session_data is not None:
         eval_init_op = iterator.make_initializer(
-            create_tf_dataset(eval_session_data, batch_size)
+            create_tf_dataset(eval_session_data, batch_size, max_seq_len)
         )
     else:
         eval_init_op = None
