@@ -898,6 +898,8 @@ def train_tf_dataset(
     batch_size: Union[List[int], int],
     evaluate_on_num_examples: int,
     evaluate_every_num_epochs: int,
+    loss_2: Optional["tf.Tensor"],
+    acc_2: Optional["tf.Tensor"],
 ) -> None:
     """Train tf graph"""
 
@@ -923,15 +925,20 @@ def train_tf_dataset(
 
         ep_train_loss = 0
         ep_train_acc = 0
+        ep_train_loss_2 = 0
+        ep_train_acc_2 = 0
         batches_per_epoch = 0
         while True:
             try:
-                _, batch_train_loss, batch_train_acc = session.run(
-                    [train_op, loss, acc], feed_dict={is_training: True}
+                _, batch_train_loss, batch_train_acc, batch_train_loss_2, batch_train_acc_2 = session.run(
+                    [train_op, loss, acc, loss_2, acc_2], feed_dict={is_training: True}
                 )
+
                 batches_per_epoch += 1
                 ep_train_loss += batch_train_loss
                 ep_train_acc += batch_train_acc
+                ep_train_loss_2 += batch_train_loss_2
+                ep_train_acc_2 += batch_train_acc_2
 
             except tf.errors.OutOfRangeError:
                 break
@@ -939,9 +946,14 @@ def train_tf_dataset(
         train_loss = ep_train_loss / batches_per_epoch
         train_acc = ep_train_acc / batches_per_epoch
 
+        train_loss_2 = ep_train_loss_2 / batches_per_epoch
+        train_acc_2 = ep_train_acc_2 / batches_per_epoch
+
         postfix_dict = {
             "loss": "{:.3f}".format(train_loss),
             "acc": "{:.3f}".format(train_acc),
+            "loss_2": "{:.3f}".format(train_loss_2),
+            "acc_2": "{:.3f}".format(train_acc_2),
         }
 
         if eval_init_op is not None:

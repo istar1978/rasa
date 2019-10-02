@@ -504,7 +504,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
             layer_name_suffix=embed_name,
         )
 
-    def _build_tf_train_graph(self) -> Tuple["tf.Tensor", "tf.Tensor"]:
+    def _build_tf_train_graph(
+        self
+    ) -> Tuple["tf.Tensor", "tf.Tensor", "tf.Tensor", "tf.Tensor"]:
         """Bulid train graph using iterator."""
         self.a_in, self.b_in, self.c_in = self._iterator.get_next()
 
@@ -577,10 +579,10 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 self.message_embed, sequence_lengths, self.c_in
             )
 
-            ner_metric = crf_metrics["acc"][0]
+            ner_metric = crf_metrics["f1"][0]
 
         # TODO
-        return intent_loss + ner_loss, intent_metric # (intent_metric + ner_metric) / 2
+        return intent_loss, ner_loss, intent_metric, ner_metric
 
     def _calculate_crf_loss(
         self, inputs: tf.Tensor, sequence_lengths: tf.Tensor, tag_indices: tf.Tensor
@@ -605,7 +607,6 @@ class EmbeddingIntentClassifier(EntityExtractor):
         # Metrics
         weights = tf.sequence_mask(sequence_lengths, maxlen=self.max_seq_len)
         metrics = {
-            "acc": tf.metrics.accuracy(tag_indices, pred_ids, weights),
             "precision": precision(
                 tag_indices, pred_ids, self.num_tags, pos_tag_indices, weights
             ),
@@ -783,15 +784,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
         #  pad with zeros instead of -1 as we are summing up dim 1
 
         labels_sparse = self._encoded_all_label_ids
-        labels = (
-            np.zeros(
-                [
-                    len(labels_sparse),
-                    self.max_seq_len,
-                    labels_sparse[0].shape[-1],
-                ],
-                dtype=np.int32,
-            )
+        labels = np.zeros(
+            [len(labels_sparse), self.max_seq_len, labels_sparse[0].shape[-1]],
+            dtype=np.int32,
         )
         for i in range(len(labels_sparse)):
             labels[i, : labels_sparse[i].shape[0], :] = labels_sparse[i].toarray()
@@ -857,7 +852,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
             self._is_training = tf.placeholder_with_default(False, shape=())
 
-            loss, acc = self._build_tf_train_graph()
+            intent_loss, ner_loss, intent_acc, ner_acc = self._build_tf_train_graph()
+
+            loss = intent_loss + ner_loss
 
             # define which optimizer to use
             self._train_op = tf.train.AdamOptimizer().minimize(loss)
@@ -868,8 +865,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 train_init_op,
                 eval_init_op,
                 batch_size_in,
-                loss,
-                acc,
+                intent_loss,
+                intent_acc,
                 self._train_op,
                 self.session,
                 self._is_training,
@@ -877,6 +874,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 self.batch_size,
                 self.evaluate_on_num_examples,
                 self.evaluate_every_num_epochs,
+                ner_loss,
+                ner_acc,
             )
 
             # rebuild the graph for prediction

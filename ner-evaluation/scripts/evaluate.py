@@ -77,13 +77,13 @@ COMBINED_PIPELINE = [
     {
         "name": "CountVectorsFeaturizer",
         "use_flair": False,
-        "analyzer": "word",
+        "analyzer": "char_wb",
         "min_ngram": 1,
-        "max_ngram": 1,
+        "max_ngram": 5,
     },
     {
         "name": "EmbeddingIntentClassifier",
-        "epochs": 5,
+        "epochs": 50,
         "unidirectional_encoder": False,
         "named_entity_recognition": True,
         "intent_classification": True,
@@ -145,13 +145,24 @@ def create_output_files(
 
 
 def write_results(
-    result_file: Text, accuracy: float, f1_score: float, precision: float
+    result_file: Text,
+    ner_accuracy: float,
+    ner_f1_score: float,
+    ner_precision: float,
+    intent_accuracy: float,
+    intent_f1_score: float,
+    intent_precision: float,
 ):
     f = open(result_file, "a")
     f.write("RESULTS\n")
-    f.write("accuracy: {}\n".format(str(accuracy)))
-    f.write("f1_score: {}\n".format(str(f1_score)))
-    f.write("precision: {}\n".format(str(precision)))
+    f.write("NER")
+    f.write("accuracy: {}\n".format(str(ner_accuracy)))
+    f.write("f1_score: {}\n".format(str(ner_f1_score)))
+    f.write("precision: {}\n".format(str(ner_precision)))
+    f.write("INTENT CLASSIFICATION")
+    f.write("accuracy: {}\n".format(str(intent_accuracy)))
+    f.write("f1_score: {}\n".format(str(intent_f1_score)))
+    f.write("precision: {}\n".format(str(intent_precision)))
     f.close()
 
 
@@ -241,9 +252,12 @@ def run(
     )
     model_folder = os.path.join(report_folder, "model")
 
-    accuracy_list = []
-    f1_score_list = []
-    precision_list = []
+    ner_accuracy_list = []
+    ner_f1_score_list = []
+    ner_precision_list = []
+    intent_accuracy_list = []
+    intent_f1_score_list = []
+    intent_precision_list = []
 
     for i in range(runs):
         data_train, data_test = load_training_data(
@@ -251,8 +265,7 @@ def run(
         )
 
         start = time.time()
-        # TODO test data
-        path = train_model(pipeline, data_test, model_folder)
+        path = train_model(pipeline, data_train, model_folder)
         end = time.time()
         print ("Training done ({} sec).".format(end - start))
         interpreter = Interpreter.load(path)
@@ -262,22 +275,49 @@ def run(
         end = time.time()
         print ("Evaluation done ({} sec).".format(end - start))
 
-        accuracy_list.append(result["entity_evaluation"][extractor_name]["accuracy"])
-        f1_score_list.append(result["entity_evaluation"][extractor_name]["f1_score"])
-        precision_list.append(result["entity_evaluation"][extractor_name]["precision"])
+        ner_accuracy_list.append(
+            result["entity_evaluation"][extractor_name]["accuracy"]
+        )
+        ner_f1_score_list.append(
+            result["entity_evaluation"][extractor_name]["f1_score"]
+        )
+        ner_precision_list.append(
+            result["entity_evaluation"][extractor_name]["precision"]
+        )
+
+        intent_accuracy_list.append(result["intent_evaluation"]["accuracy"])
+        intent_f1_score_list.append(result["intent_evaluation"]["f1_score"])
+        intent_precision_list.append(result["intent_evaluation"]["precision"])
 
         add_to_report(report_file, i, result)
 
-    accuracy = sum(accuracy_list) / len(accuracy_list)
-    precision = sum(precision_list) / len(precision_list)
-    f1_score = sum(f1_score_list) / len(f1_score_list)
+    ner_accuracy = sum(ner_accuracy_list) / len(ner_accuracy_list)
+    ner_precision = sum(ner_precision_list) / len(ner_precision_list)
+    ner_f1_score = sum(ner_f1_score_list) / len(ner_f1_score_list)
 
-    write_results(result_file, accuracy, f1_score, precision)
+    intent_accuracy = sum(intent_accuracy_list) / len(intent_accuracy_list)
+    intent_precision = sum(intent_precision_list) / len(intent_precision_list)
+    intent_f1_score = sum(intent_f1_score_list) / len(intent_f1_score_list)
+
+    write_results(
+        result_file,
+        ner_accuracy,
+        ner_f1_score,
+        ner_precision,
+        intent_accuracy,
+        intent_f1_score,
+        intent_precision,
+    )
     write_config(configuration_file, runs, train_frac, pipeline)
 
-    print ("F1-Score: {}".format(f1_score))
-    print ("Precision: {}".format(precision))
-    print ("Accuracy: {}".format(accuracy))
+    print ("NER:")
+    print ("F1-Score: {}".format(ner_f1_score))
+    print ("Precision: {}".format(ner_precision))
+    print ("Accuracy: {}".format(ner_accuracy))
+    print ("Intent:")
+    print ("F1-Score: {}".format(intent_f1_score))
+    print ("Precision: {}".format(intent_precision))
+    print ("Accuracy: {}".format(intent_accuracy))
     print (
         "Done evaluating pipeline '{}' on dataset '{}'. Results written to '{}'.".format(
             pipeline_name, data_path, report_folder
