@@ -83,7 +83,6 @@ class EmbeddingIntentClassifier(EntityExtractor):
         "pos_encoding": "timing",  # string 'timing' or 'emb'
         # max sequence length if pos_encoding='emb'
         "max_seq_length": 256,
-        "max_seq_len": None,
         # training parameters
         # initial and final batch sizes - batch size will be
         # linearly increased for each epoch
@@ -238,7 +237,6 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.num_heads = self.component_config["num_heads"]
         self.pos_encoding = self.component_config["pos_encoding"]
         self.max_seq_length = self.component_config["max_seq_length"]
-        self.max_seq_len = self.component_config["max_seq_len"]
         self.unidirectional_encoder = self.component_config["unidirectional_encoder"]
 
     def _load_embedding_params(self, config: Dict[Text, Any]) -> None:
@@ -317,8 +315,11 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 for e in example.get(attribute)
             ]
         ) - {None}
-        distinct_tag_ids.add("O")
-        return {tag_id: idx for idx, tag_id in enumerate(sorted(distinct_tag_ids))}
+        tag_id_dict = {
+            tag_id: idx for idx, tag_id in enumerate(sorted(distinct_tag_ids), 1)
+        }
+        tag_id_dict["O"] = 0
+        return tag_id_dict
 
     @staticmethod
     def _find_example_for_label(label, examples, attribute):
@@ -443,30 +444,21 @@ class EmbeddingIntentClassifier(EntityExtractor):
         Y = []
         label_ids = []
         tags = []
-        max_len = 0
 
         for e in training_data.training_examples:
             features = e.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE])
             X.append(features)
             # every example should have an intent
             label_ids.append(label_id_dict[e.get(MESSAGE_INTENT_ATTRIBUTE)])
-            if len(e.get("tokens", [])) > max_len:
-                max_len = len(e.get("tokens", []))
-
-        self.max_seq_len = max_len
 
         for e in training_data.training_examples:
             _tags = []
-            for i in range(self.max_seq_len):
-                if i < len(e.get("tokens")):
-                    t = e.get("tokens")[i]
-                    _tag = determine_token_labels(
-                        t, e.get(MESSAGE_ENTITIES_ATTRIBUTE), None
-                    )
-                    _tags.append(tag_id_dict[_tag])
-                else:
-                    _tags.append(tag_id_dict["O"])
-            tags.append(_tags)
+            for t in e.get("tokens"):
+                _tag = determine_token_labels(
+                    t, e.get(MESSAGE_ENTITIES_ATTRIBUTE), None
+                )
+                _tags.append(tag_id_dict[_tag])
+            tags.append(csr_matrix(np.array([_tags]).T))
 
         X = np.array(X)
         label_ids = np.array(label_ids)
@@ -508,6 +500,10 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self
     ) -> Tuple["tf.Tensor", "tf.Tensor", "tf.Tensor", "tf.Tensor"]:
         """Bulid train graph using iterator."""
+
+        # a_in is tensor of batch-size x seq-len x feature-len for text
+        # b_in is tensor of batch-size x 1 x feature-len for labels
+        # c_in is tensor of batch-size x seq-len x 1
         self.a_in, self.b_in, self.c_in = self._iterator.get_next()
 
         intent_loss = intent_metric = ner_loss = ner_metric = tf.constant(0.0)
@@ -529,24 +525,21 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 layer_name_suffix="a",
             )
 
+            # all_label_ids is tensor of label-count x 1 x feature-len for labels
             all_label_ids = tf.constant(
                 self._encoded_all_label_ids, dtype=tf.float32, name="all_labels_raw"
             )
-
-            # reduce dimensionality as input should not be sequence for intent
-            # classification
-            # TODO check if b_in is correctly encoded
-            self.b_in = tf.reduce_sum(self.b_in, 1)
-            all_label_ids = tf.reduce_sum(all_label_ids, 1)
-
-            self.label_embed = self._create_tf_embed_fnn(
-                self.b_in,
+            all_label_ids = tf.reduce_sum(tf.nn.relu(all_label_ids), 1)
+            self.all_labels_embed = self._create_tf_embed_fnn(
+                all_label_ids,
                 self.hidden_layer_sizes["b"],
                 fnn_name="a_b" if self.share_hidden_layers else "b",
                 embed_name="b",
             )
-            self.all_labels_embed = self._create_tf_embed_fnn(
-                all_label_ids,
+
+            self.b_in = tf.reduce_sum(tf.nn.relu(self.b_in), 1)
+            self.label_embed = self._create_tf_embed_fnn(
+                self.b_in,
                 self.hidden_layer_sizes["b"],
                 fnn_name="a_b" if self.share_hidden_layers else "b",
                 embed_name="b",
@@ -575,13 +568,14 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 sequence_lengths = tf.squeeze(sequence_lengths)
             sequence_lengths.set_shape([mask.shape[0]])
 
+            self.c_in = tf.reduce_sum(tf.nn.relu(self.c_in), -1)
+
             ner_loss, crf_metrics = self._calculate_crf_loss(
                 self.message_embed, sequence_lengths, self.c_in
             )
 
             ner_metric = crf_metrics["f1"][0]
 
-        # TODO
         return intent_loss, ner_loss, intent_metric, ner_metric
 
     def _calculate_crf_loss(
@@ -605,7 +599,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         pos_tag_indices = [k for k, v in self.inverted_tag_dict.items() if v != "O"]
 
         # Metrics
-        weights = tf.sequence_mask(sequence_lengths, maxlen=self.max_seq_len)
+        weights = tf.sequence_mask(sequence_lengths)
         metrics = {
             "precision": precision(
                 tag_indices, pred_ids, self.num_tags, pos_tag_indices, weights
@@ -678,7 +672,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.b_in = tf.placeholder(
             tf.float32, (None, None, session_data.Y[0].shape[-1]), name="b"
         )
-        self.c_in = tf.placeholder(tf.int64, (None, None), name="c")
+        self.c_in = tf.placeholder(tf.int64, (None, None, None), name="c")
 
         self.message_embed, mask = self._create_tf_sequence(self.a_in)
 
@@ -782,16 +776,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
         #  ideally do not use max_seq_len but max length of label seq
         #  should have the same dimensionality as b_in
         #  pad with zeros instead of -1 as we are summing up dim 1
-
-        labels_sparse = self._encoded_all_label_ids
-        labels = np.zeros(
-            [len(labels_sparse), self.max_seq_len, labels_sparse[0].shape[-1]],
-            dtype=np.int32,
+        self._encoded_all_label_ids = train_utils.convert_sparse_to_dense(
+            self._encoded_all_label_ids
         )
-        for i in range(len(labels_sparse)):
-            labels[i, : labels_sparse[i].shape[0], :] = labels_sparse[i].toarray()
-
-        self._encoded_all_label_ids = labels
 
         return session_data
 
@@ -843,11 +830,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 train_init_op,
                 eval_init_op,
             ) = train_utils.create_iterator_init_datasets(
-                session_data,
-                eval_session_data,
-                batch_size_in,
-                self.batch_strategy,
-                self.max_seq_len,
+                session_data, eval_session_data, batch_size_in, self.batch_strategy
             )
 
             self._is_training = tf.placeholder_with_default(False, shape=())

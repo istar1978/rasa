@@ -1,6 +1,7 @@
 from collections import namedtuple
 import logging
 import numpy as np
+from scipy.sparse import csr_matrix
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 import tensorflow as tf
@@ -198,7 +199,6 @@ def balance_session_data(
 def gen_batch(
     session_data: "SessionData",
     batch_size: int,
-    max_seq_len: int,
     batch_strategy: Text = "sequence",
     shuffle: bool = False,
 ) -> Generator[Tuple["np.ndarray", "np.ndarray", "np.ndarray"], None, None]:
@@ -218,30 +218,30 @@ def gen_batch(
         start = batch_num * batch_size
         end = (batch_num + 1) * batch_size
 
-        batch_x_sparse = session_data.X[start:end]
-        batch_y_sparse = session_data.Y[start:end]
-        batch_tags = session_data.tags[start:end]
-
-        batch_size = min(len(batch_x_sparse), batch_size)
-
-        feature_len_x = session_data.X[0].shape[-1]
-        feature_len_y = session_data.Y[0].shape[-1]
-
-        batch_x = np.ones([batch_size, max_seq_len, feature_len_x], dtype=np.int32) * -1
-        batch_y = np.zeros([batch_size, max_seq_len, feature_len_y], dtype=np.int32)
-
-        for i in range(batch_size):
-            batch_x[i, : batch_x_sparse[i].shape[0], :] = batch_x_sparse[i].toarray()
-            batch_y[i, : batch_y_sparse[i].shape[0], :] = batch_y_sparse[i].toarray()
+        batch_x = convert_sparse_to_dense(session_data.X[start:end])
+        batch_y = convert_sparse_to_dense(session_data.Y[start:end])
+        batch_tags = convert_sparse_to_dense(session_data.tags[start:end])
 
         yield batch_x, batch_y, batch_tags
+
+
+def convert_sparse_to_dense(data_sparse: Union[np.ndarray, List[csr_matrix]]):
+    data_size = len(data_sparse)
+    max_seq_len = max([x.shape[0] for x in data_sparse])
+    feature_len = max([x.shape[-1] for x in data_sparse])
+
+    data_dense = np.ones([data_size, max_seq_len, feature_len], dtype=np.int32) * -1
+
+    for i in range(data_size):
+        data_dense[i, : data_sparse[i].shape[0], :] = data_sparse[i].toarray()
+
+    return data_dense
 
 
 # noinspection PyPep8Naming
 def create_tf_dataset(
     session_data: "SessionData",
     batch_size: Union["tf.Tensor", int],
-    max_seq_len: int,
     batch_strategy: Text = "sequence",
     shuffle: bool = False,
 ) -> "tf.data.Dataset":
@@ -265,7 +265,7 @@ def create_tf_dataset(
 
     return tf.data.Dataset.from_generator(
         lambda batch_size_: gen_batch(
-            session_data, batch_size_, max_seq_len, batch_strategy, shuffle
+            session_data, batch_size_, batch_strategy, shuffle
         ),
         output_types=(tf.float32, tf.float32, tf.int64),
         output_shapes=(shape_X, shape_Y, shape_tags),
@@ -278,17 +278,12 @@ def create_iterator_init_datasets(
     eval_session_data: "SessionData",
     batch_size: Union["tf.Tensor", int],
     batch_strategy: Text,
-    max_seq_len: int,
 ) -> Tuple["tf.data.Iterator", "tf.Operation", "tf.Operation"]:
     """Create iterator and init datasets."""
 
     # TODO shuffle True
     train_dataset = create_tf_dataset(
-        session_data,
-        batch_size,
-        max_seq_len,
-        batch_strategy=batch_strategy,
-        shuffle=False,
+        session_data, batch_size, batch_strategy=batch_strategy, shuffle=False
     )
 
     iterator = tf.data.Iterator.from_structure(
@@ -301,7 +296,7 @@ def create_iterator_init_datasets(
 
     if eval_session_data is not None:
         eval_init_op = iterator.make_initializer(
-            create_tf_dataset(eval_session_data, batch_size, max_seq_len)
+            create_tf_dataset(eval_session_data, batch_size)
         )
     else:
         eval_init_op = None
