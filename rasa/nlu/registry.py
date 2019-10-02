@@ -24,7 +24,6 @@ from rasa.nlu.extractors.spacy_entity_extractor import SpacyEntityExtractor
 from rasa.nlu.extractors.flair_entity_extractor import FlairEntityExtractor
 from rasa.nlu.featurizers.count_vectors_featurizer import CountVectorsFeaturizer
 from rasa.nlu.featurizers.mitie_featurizer import MitieFeaturizer
-from rasa.nlu.featurizers.ngram_featurizer import NGramFeaturizer
 from rasa.nlu.featurizers.regex_featurizer import RegexFeaturizer
 from rasa.nlu.featurizers.spacy_featurizer import SpacyFeaturizer
 from rasa.nlu.model import Metadata
@@ -66,7 +65,6 @@ component_classes = [
     # featurizers
     SpacyFeaturizer,
     MitieFeaturizer,
-    NGramFeaturizer,
     RegexFeaturizer,
     CountVectorsFeaturizer,
     # classifiers
