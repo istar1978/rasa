@@ -76,17 +76,17 @@ COMBINED_PIPELINE = [
     {"name": "WhitespaceTokenizer", "add_class_label": True},
     {
         "name": "CountVectorsFeaturizer",
-        "use_flair": False,
-        "analyzer": "char_wb",
+        "embeddings_from_flair": [],
+        "analyzer": "word",
         "min_ngram": 1,
-        "max_ngram": 5,
+        "max_ngram": 1,
     },
     {
         "name": "EmbeddingIntentClassifier",
         "epochs": 50,
         "unidirectional_encoder": False,
         "named_entity_recognition": True,
-        "intent_classification": True,
+        "intent_classification": False,
     },
 ]
 
@@ -204,7 +204,7 @@ def evaluate_model(
 ) -> Tuple[Dict, Text]:
     interpreter.pipeline = remove_pretrained_extractors(interpreter.pipeline)
 
-    result = {"entity_evaluation": None, "intent_evaluation": None}
+    result = {"entity_evaluation": {}, "intent_evaluation": {}}
 
     intent_results, _, entity_results = get_eval_data(interpreter, test_data)
 
@@ -275,29 +275,43 @@ def run(
         end = time.time()
         print ("Evaluation done ({} sec).".format(end - start))
 
-        ner_accuracy_list.append(
-            result["entity_evaluation"][extractor_name]["accuracy"]
-        )
-        ner_f1_score_list.append(
-            result["entity_evaluation"][extractor_name]["f1_score"]
-        )
-        ner_precision_list.append(
-            result["entity_evaluation"][extractor_name]["precision"]
-        )
+        if (
+            "entity_evaluation" in result
+            and extractor_name in result["entity_evaluation"]
+        ):
+            ner_accuracy_list.append(
+                result["entity_evaluation"][extractor_name]["accuracy"]
+            )
+            ner_f1_score_list.append(
+                result["entity_evaluation"][extractor_name]["f1_score"]
+            )
+            ner_precision_list.append(
+                result["entity_evaluation"][extractor_name]["precision"]
+            )
 
-        intent_accuracy_list.append(result["intent_evaluation"]["accuracy"])
-        intent_f1_score_list.append(result["intent_evaluation"]["f1_score"])
-        intent_precision_list.append(result["intent_evaluation"]["precision"])
+        if "intent_evaluation" in result and result["intent_evaluation"]:
+            intent_accuracy_list.append(result["intent_evaluation"]["accuracy"])
+            intent_f1_score_list.append(result["intent_evaluation"]["f1_score"])
+            intent_precision_list.append(result["intent_evaluation"]["precision"])
 
         add_to_report(report_file, i, result)
 
-    ner_accuracy = sum(ner_accuracy_list) / len(ner_accuracy_list)
-    ner_precision = sum(ner_precision_list) / len(ner_precision_list)
-    ner_f1_score = sum(ner_f1_score_list) / len(ner_f1_score_list)
+    ner_accuracy = 0.0
+    ner_f1_score = 0.0
+    ner_precision = 0.0
+    intent_accuracy = 0.0
+    intent_f1_score = 0.0
+    intent_precision = 0.0
 
-    intent_accuracy = sum(intent_accuracy_list) / len(intent_accuracy_list)
-    intent_precision = sum(intent_precision_list) / len(intent_precision_list)
-    intent_f1_score = sum(intent_f1_score_list) / len(intent_f1_score_list)
+    if len(ner_accuracy_list) > 0:
+        ner_accuracy = sum(ner_accuracy_list) / len(ner_accuracy_list)
+        ner_precision = sum(ner_precision_list) / len(ner_precision_list)
+        ner_f1_score = sum(ner_f1_score_list) / len(ner_f1_score_list)
+
+    if len(intent_accuracy_list) > 0:
+        intent_accuracy = sum(intent_accuracy_list) / len(intent_accuracy_list)
+        intent_precision = sum(intent_precision_list) / len(intent_precision_list)
+        intent_f1_score = sum(intent_f1_score_list) / len(intent_f1_score_list)
 
     write_results(
         result_file,

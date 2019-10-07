@@ -4,7 +4,12 @@ import re
 from typing import Any, Dict, List, Optional, Text
 
 from flair.data import Sentence
-from flair.embeddings import WordEmbeddings, FlairEmbeddings, StackedEmbeddings
+from flair.embeddings import (
+    WordEmbeddings,
+    FlairEmbeddings,
+    StackedEmbeddings,
+    FastTextEmbeddings,
+)
 from scipy.sparse import csr_matrix, hstack
 
 from sklearn.feature_extraction.text import CountVectorizer
@@ -81,7 +86,7 @@ class CountVectorsFeaturizer(Featurizer):
         "OOV_token": None,  # string or None
         "OOV_words": [],  # string or list of strings
         # add embeddings from flair library
-        "use_flair": False,
+        "embeddings_from_flair": [],
     }
 
     @classmethod
@@ -122,7 +127,7 @@ class CountVectorsFeaturizer(Featurizer):
         # if convert all characters to lowercase
         self.lowercase = self.component_config["lowercase"]
 
-        self.use_flair = self.component_config["use_flair"]
+        self.embeddings_from_flair = self.component_config["embeddings_from_flair"]
 
     # noinspection PyPep8Naming
     def _load_OOV_params(self):
@@ -217,6 +222,24 @@ class CountVectorsFeaturizer(Featurizer):
 
         # declare class instance for CountVectorizer
         self.vectorizers = vectorizers
+
+        self.stacked_embeddings = None
+        if self.embeddings_from_flair:
+            embeddings = []
+            if "glove" in self.embeddings_from_flair:
+                glove_embedding = WordEmbeddings("glove")
+                embeddings.append(glove_embedding)
+            if "flair" in self.embeddings_from_flair:
+                flair_embedding_forward = FlairEmbeddings("news-forward")
+                flair_embedding_backward = FlairEmbeddings("news-backward")
+                embeddings.append(flair_embedding_forward)
+                embeddings.append(flair_embedding_backward)
+            if "fasttext" in self.embeddings_from_flair:
+                fasttext_embedding = FastTextEmbeddings(
+                    "/Users/tabergma/.flair/cc.en.300.bin"
+                )
+                embeddings.append(fasttext_embedding)
+            self.stacked_embeddings = StackedEmbeddings(embeddings)
 
     def _get_message_text_by_attribute(
         self, message: "Message", attribute: Text = MESSAGE_TEXT_ATTRIBUTE
@@ -498,17 +521,10 @@ class CountVectorsFeaturizer(Featurizer):
         return X
 
     def add_flair_embeddings(self, tokens: List[Text], x: csr_matrix):
-        if self.use_flair:
-            glove_embedding = WordEmbeddings("glove")
-            flair_embedding_forward = FlairEmbeddings("news-forward")
-            flair_embedding_backward = FlairEmbeddings("news-backward")
-            stacked_embeddings = StackedEmbeddings(
-                [glove_embedding, flair_embedding_forward, flair_embedding_backward]
-            )
-
+        if self.stacked_embeddings is not None:
             sentence = Sentence(" ".join(tokens), use_tokenizer=False)
 
-            stacked_embeddings.embed(sentence)
+            self.stacked_embeddings.embed(sentence)
 
             y = csr_matrix([t.embedding.numpy() for t in sentence])
             y.sort_indices()
