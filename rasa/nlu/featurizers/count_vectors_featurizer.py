@@ -9,6 +9,7 @@ from flair.embeddings import (
     FlairEmbeddings,
     StackedEmbeddings,
     FastTextEmbeddings,
+    ELMoEmbeddings,
 )
 from scipy.sparse import csr_matrix, hstack
 
@@ -226,6 +227,9 @@ class CountVectorsFeaturizer(Featurizer):
         self.stacked_embeddings = None
         if self.embeddings_from_flair:
             embeddings = []
+            if "elmo" in self.embeddings_from_flair:
+                elmo_embedding = ELMoEmbeddings()
+                embeddings.append(elmo_embedding)
             if "glove" in self.embeddings_from_flair:
                 glove_embedding = WordEmbeddings("glove")
                 embeddings.append(glove_embedding)
