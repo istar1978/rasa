@@ -530,7 +530,7 @@ class CountVectorsFeaturizer(Featurizer):
 
             self.stacked_embeddings.embed(sentence)
 
-            y = csr_matrix([t.embedding.numpy() for t in sentence])
+            y = csr_matrix([t.embedding.cpu().numpy() for t in sentence])
             y.sort_indices()
 
             if x.shape[0] == y.shape[0]:
