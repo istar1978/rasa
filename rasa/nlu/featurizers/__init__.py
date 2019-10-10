@@ -14,8 +14,8 @@ class Featurizer(Component):
         feature_name: Text = MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE],
     ) -> Any:
         if message.get(feature_name) is not None:
-            return np.concatenate(
-                (message.get(feature_name), additional_features), axis=-1
-            )
+            from scipy.sparse import hstack
+
+            return hstack([message.get(feature_name), additional_features])
         else:
             return additional_features
