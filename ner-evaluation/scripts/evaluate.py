@@ -1,6 +1,5 @@
 import time
 
-import traceback
 import json
 import os
 from typing import Tuple, Optional, Text, List, Dict
@@ -83,10 +82,10 @@ COMBINED_PIPELINE = [
     },
     {
         "name": "EmbeddingIntentClassifier",
-        "epochs": 50,
+        "epochs": 5,
         "unidirectional_encoder": False,
         "named_entity_recognition": True,
-        "intent_classification": False,
+        "intent_classification": True,
     },
 ]
 

@@ -1,4 +1,6 @@
 import logging
+import tempfile
+
 import numpy as np
 import os
 import pickle
@@ -7,6 +9,7 @@ from scipy.sparse import csr_matrix
 from typing import Any, Dict, List, Optional, Text, Tuple
 import warnings
 
+from nlu.plotter import Plotter
 from rasa.nlu.extractors import EntityExtractor
 from rasa.nlu.test import determine_token_labels
 from rasa.nlu.tokenizers import Token
@@ -24,6 +27,8 @@ import tensorflow as tf
 from tf_metrics import precision, recall, f1
 
 # avoid warning println on contrib import - remove for tf 2
+from utils.io import create_temporary_file
+
 tf.contrib._warning = None
 
 logger = logging.getLogger(__name__)
@@ -191,6 +196,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self._iterator = None
         self._train_op = None
         self._is_training = None
+
+        self.training_log_file = create_temporary_file("")
 
     # config migration warning
     def _check_old_config_variables(self, config: Dict[Text, Any]) -> None:
@@ -570,13 +577,11 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
             self.c_in = tf.reduce_sum(tf.nn.relu(self.c_in), -1)
 
-            ner_loss, crf_metrics = self._calculate_crf_loss(
+            ner_loss, ner_metric = self._calculate_crf_loss(
                 self.message_embed, sequence_lengths, self.c_in
             )
 
-            ner_metric = crf_metrics["f1"][0]
-
-        return intent_loss, ner_loss, intent_metric, ner_metric
+        return intent_loss, intent_metric, ner_loss, ner_metric
 
     def _calculate_crf_loss(
         self, inputs: tf.Tensor, sequence_lengths: tf.Tensor, tag_indices: tf.Tensor
@@ -601,6 +606,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         # Metrics
         weights = tf.sequence_mask(sequence_lengths)
         metrics = {
+            "acc": tf.metrics.accuracy(tag_indices, pred_ids, weights),
             "precision": precision(
                 tag_indices, pred_ids, self.num_tags, pos_tag_indices, weights
             ),
@@ -609,10 +615,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
             ),
             "f1": f1(tag_indices, pred_ids, self.num_tags, pos_tag_indices, weights),
         }
-        for metric_name, op in metrics.items():
-            tf.summary.scalar(metric_name, op[1])
 
-        return loss, metrics
+        return loss, metrics["f1"][1]
 
     def _create_crf(
         self, input: tf.Tensor, sequence_lengths: tf.Tensor
@@ -835,7 +839,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
             self._is_training = tf.placeholder_with_default(False, shape=())
 
-            intent_loss, ner_loss, intent_acc, ner_acc = self._build_tf_train_graph()
+            intent_loss, intent_acc, ner_loss, ner_acc = self._build_tf_train_graph()
 
             loss = intent_loss + ner_loss
 
@@ -859,6 +863,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 self.evaluate_every_num_epochs,
                 ner_loss,
                 ner_acc,
+                output_file=self.training_log_file,
             )
 
             # rebuild the graph for prediction
@@ -1002,6 +1007,11 @@ class EmbeddingIntentClassifier(EntityExtractor):
             return {"file": None}
 
         checkpoint = os.path.join(model_dir, file_name + ".ckpt")
+
+        plotter = Plotter()
+        plotter.plot_training_curves(
+            self.training_log_file, os.path.join(model_dir, "training.png")
+        )
 
         try:
             os.makedirs(os.path.dirname(checkpoint))

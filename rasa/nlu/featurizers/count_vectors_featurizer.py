@@ -88,6 +88,7 @@ class CountVectorsFeaturizer(Featurizer):
         "OOV_words": [],  # string or list of strings
         # add embeddings from flair library
         "embeddings_from_flair": [],
+        "use_only_embeddings": False,
     }
 
     @classmethod
@@ -129,6 +130,7 @@ class CountVectorsFeaturizer(Featurizer):
         self.lowercase = self.component_config["lowercase"]
 
         self.embeddings_from_flair = self.component_config["embeddings_from_flair"]
+        self.use_only_embeddings = self.component_config["use_only_embeddings"]
 
     # noinspection PyPep8Naming
     def _load_OOV_params(self):
@@ -228,7 +230,7 @@ class CountVectorsFeaturizer(Featurizer):
         if self.embeddings_from_flair:
             embeddings = []
             if "elmo" in self.embeddings_from_flair:
-                elmo_embedding = ELMoEmbeddings()
+                elmo_embedding = ELMoEmbeddings("small")
                 embeddings.append(elmo_embedding)
             if "glove" in self.embeddings_from_flair:
                 glove_embedding = WordEmbeddings("glove")
@@ -535,6 +537,9 @@ class CountVectorsFeaturizer(Featurizer):
 
             if x.shape[0] == y.shape[0]:
                 x = hstack([x, y])
+
+            if self.use_only_embeddings:
+                return y
 
         return x
 

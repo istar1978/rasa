@@ -1,6 +1,7 @@
 from collections import namedtuple
 import logging
 import numpy as np
+import datetime
 from scipy.sparse import csr_matrix
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
@@ -884,8 +885,8 @@ def train_tf_dataset(
     train_init_op: "tf.Operation",
     eval_init_op: "tf.Operation",
     batch_size_in: "tf.Tensor",
-    loss: "tf.Tensor",
-    acc: "tf.Tensor",
+    intent_loss: "tf.Tensor",
+    intent_acc: "tf.Tensor",
     train_op: "tf.Tensor",
     session: "tf.Session",
     is_training: "tf.Session",
@@ -893,8 +894,9 @@ def train_tf_dataset(
     batch_size: Union[List[int], int],
     evaluate_on_num_examples: int,
     evaluate_every_num_epochs: int,
-    loss_2: Optional["tf.Tensor"],
-    acc_2: Optional["tf.Tensor"],
+    ner_loss: Optional["tf.Tensor"],
+    ner_acc: Optional["tf.Tensor"],
+    output_file: Optional[Text] = None,
 ) -> None:
     """Train tf graph"""
 
@@ -925,8 +927,9 @@ def train_tf_dataset(
         batches_per_epoch = 0
         while True:
             try:
-                _, batch_train_loss, batch_train_acc, batch_train_loss_2, batch_train_acc_2 = session.run(
-                    [train_op, loss, acc, loss_2, acc_2], feed_dict={is_training: True}
+                _, batch_train_loss, batch_train_loss_2, batch_train_acc, batch_train_acc_2 = session.run(
+                    [train_op, intent_loss, ner_loss, intent_acc, ner_acc],
+                    feed_dict={is_training: True},
                 )
 
                 batches_per_epoch += 1
@@ -940,23 +943,22 @@ def train_tf_dataset(
 
         train_loss = ep_train_loss / batches_per_epoch
         train_acc = ep_train_acc / batches_per_epoch
-
         train_loss_2 = ep_train_loss_2 / batches_per_epoch
         train_acc_2 = ep_train_acc_2 / batches_per_epoch
 
         postfix_dict = {
-            "loss": "{:.3f}".format(train_loss),
-            "acc": "{:.3f}".format(train_acc),
-            "loss_2": "{:.3f}".format(train_loss_2),
-            "acc_2": "{:.3f}".format(train_acc_2),
+            "intent_loss": "{:.3f}".format(train_loss),
+            "intent_acc": "{:.3f}".format(train_acc),
+            "ner_loss": "{:.3f}".format(train_loss_2),
+            "ner_acc": "{:.3f}".format(train_acc_2),
         }
 
         if eval_init_op is not None:
             if (ep + 1) % evaluate_every_num_epochs == 0 or (ep + 1) == epochs:
                 val_loss, val_acc = output_validation_stat(
                     eval_init_op,
-                    loss,
-                    acc,
+                    intent_loss,
+                    intent_acc,
                     session,
                     is_training,
                     batch_size_in,
@@ -971,6 +973,19 @@ def train_tf_dataset(
             )
 
         pbar.set_postfix(postfix_dict)
+
+        if output_file:
+            # output log file
+            with open(output_file, "a") as f:
+                # make headers on first epoch
+                if ep == 0:
+                    f.write(
+                        f"EPOCH\tTIMESTAMP\tINTENT_LOSS\tNER_LOSS\tINTENT_ACC\tNER_ACC"
+                    )
+
+                f.write(
+                    f"\n{ep}\t{datetime.datetime.now():%H:%M:%S}\t{train_loss}\t{train_loss_2}\t{train_acc}\t{train_acc_2}"
+                )
 
     final_message = (
         "Finished training embedding policy, "
