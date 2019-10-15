@@ -137,6 +137,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         "intent_classification": True,
         # if true named entity recognition is trained and entities predicted
         "named_entity_recognition": True,
+        "use_pretrained_embeddings": False,
     }
     # end default properties (DOC MARKER - don't remove)
 
@@ -289,6 +290,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
             "named_entity_recognition"
         ]
         self.num_tags = self.component_config["num_tags"]
+        self.use_pretrained_embeddings = self.component_config[
+            "use_pretrained_embeddings"
+        ]
 
     # package safety checks
     @classmethod
@@ -522,6 +526,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
             self._iterator.get_next()
         )
 
+        if not self.use_pretrained_embeddings:
+            self.pretrained_embeddings = None
+
         intent_loss = intent_metric = ner_loss = ner_metric = tf.constant(0.0)
 
         # transformer
@@ -699,6 +706,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
             tf.float32, (None, None, session_data.Y[0].shape[-1]), name="b"
         )
         self.c_in = tf.placeholder(tf.int64, (None, None, None), name="c")
+
+        if not self.use_pretrained_embeddings:
+            self.pretrained_embeddings = None
 
         self.message_embed, mask = self._create_tf_sequence(
             self.a_in, self.pretrained_embeddings
@@ -903,10 +913,15 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self, X: np.ndarray, X_embeddings: np.ndarray
     ) -> Tuple[np.ndarray, List[float]]:
         """Calculate message similarities"""
-        message_sim = self.session.run(
-            self.intent_prediction,
-            feed_dict={self.a_in: X, self.pretrained_embeddings: X_embeddings},
-        )
+        if self.use_pretrained_embeddings:
+            message_sim = self.session.run(
+                self.intent_prediction,
+                feed_dict={self.a_in: X, self.pretrained_embeddings: X_embeddings},
+            )
+        else:
+            message_sim = self.session.run(
+                self.intent_prediction, feed_dict={self.a_in: X}
+            )
 
         message_sim = message_sim.flatten()  # sim is a matrix
 
@@ -935,10 +950,15 @@ class EmbeddingIntentClassifier(EntityExtractor):
             X_embeddings = np.expand_dims(X_embeddings, axis=0)
 
             # load tf graph and session
-            predictions = self.session.run(
-                self.tag_prediction,
-                feed_dict={self.a_in: X, self.pretrained_embeddings: X_embeddings},
-            )
+            if self.use_pretrained_embeddings:
+                predictions = self.session.run(
+                    self.tag_prediction,
+                    feed_dict={self.a_in: X, self.pretrained_embeddings: X_embeddings},
+                )
+            else:
+                predictions = self.session.run(
+                    self.tag_prediction, feed_dict={self.a_in: X}
+                )
 
             tags = [self.inverted_tag_dict[p] for p in predictions[0]]
 
@@ -1061,11 +1081,12 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 raise
         with self.graph.as_default():
             train_utils.persist_tensor("message_placeholder", self.a_in, self.graph)
-            train_utils.persist_tensor(
-                "pretrained_embeddings_placeholder",
-                self.pretrained_embeddings,
-                self.graph,
-            )
+            if self.use_pretrained_embeddings:
+                train_utils.persist_tensor(
+                    "pretrained_embeddings_placeholder",
+                    self.pretrained_embeddings,
+                    self.graph,
+                )
             train_utils.persist_tensor("label_placeholder", self.b_in, self.graph)
             train_utils.persist_tensor("tag_placeholder", self.c_in, self.graph)
 
@@ -1131,6 +1152,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 saver.restore(session, checkpoint)
 
                 a_in = train_utils.load_tensor("message_placeholder")
+
                 pretrained_embeddings = train_utils.load_tensor(
                     "pretrained_embeddings_placeholder"
                 )

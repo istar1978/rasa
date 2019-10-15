@@ -459,8 +459,9 @@ def create_t2t_transformer_encoder(
     """Create t2t transformer encoder."""
 
     with tf.variable_scope("transformer", reuse=tf.AUTO_REUSE):
-        x_in = tf.concat([x_in, pretrained_embeddings], axis=-1)
-        x_in = tf.contrib.layers.layer_norm(x_in)
+        if pretrained_embeddings is not None:
+            x_in = tf.concat([x_in, pretrained_embeddings], axis=-1)
+            x_in = tf.contrib.layers.layer_norm(x_in)
 
         x = create_tf_fnn(
             x_in,
