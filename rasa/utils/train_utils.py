@@ -25,7 +25,7 @@ tf.contrib._warning = None
 logger = logging.getLogger(__name__)
 
 # namedtuple for all tf session related data
-SessionData = namedtuple("SessionData", ("X", "Y", "label_ids", "tags"))
+SessionData = namedtuple("SessionData", ("X", "X_embeddings", "Y", "label_ids", "tags"))
 
 
 def load_tf_config(config: Dict[Text, Any]) -> Optional[tf.compat.v1.ConfigProto]:
@@ -82,8 +82,16 @@ def train_val_split(
     label_ids_train = np.concatenate([label_ids_train, solo_label_ids])
 
     return (
-        SessionData(X=X_train, Y=Y_train, label_ids=label_ids_train, tags=None),
-        SessionData(X=X_val, Y=Y_val, label_ids=label_ids_val, tags=None),
+        SessionData(
+            X=X_train,
+            X_embeddings=None,
+            Y=Y_train,
+            label_ids=label_ids_train,
+            tags=None,
+        ),
+        SessionData(
+            X=X_val, X_embeddings=None, Y=Y_val, label_ids=label_ids_val, tags=None
+        ),
     )
 
 
@@ -93,6 +101,7 @@ def shuffle_session_data(session_data: "SessionData") -> "SessionData":
     ids = np.random.permutation(len(session_data.X))
     return SessionData(
         X=session_data.X[ids],
+        X_embeddings=session_data.X_embeddings[ids],
         Y=session_data.Y[ids],
         label_ids=session_data.label_ids[ids],
         tags=session_data.tags[ids],
@@ -109,6 +118,9 @@ def split_session_data_by_label(
         label_data.append(
             SessionData(
                 X=session_data.X[session_data.label_ids == label_id],
+                X_embeddings=session_data.X_embeddings[
+                    session_data.label_ids == label_id
+                ],
                 Y=session_data.Y[session_data.label_ids == label_id],
                 label_ids=session_data.label_ids[session_data.label_ids == label_id],
                 tags=session_data.tags[session_data.label_ids == label_id],
@@ -141,6 +153,7 @@ def balance_session_data(
     num_data_cycles = [0] * num_label_ids
     skipped = [False] * num_label_ids
     new_X = []
+    new_X_embeddings = []
     new_Y = []
     new_label_ids = []
     new_tags = []
@@ -163,6 +176,11 @@ def balance_session_data(
 
             new_X.append(
                 label_data[index].X[
+                    data_idx[index] : data_idx[index] + index_batch_size
+                ]
+            )
+            new_X_embeddings.append(
+                label_data[index].X_embeddings[
                     data_idx[index] : data_idx[index] + index_batch_size
                 ]
             )
@@ -192,6 +210,7 @@ def balance_session_data(
 
     return SessionData(
         X=np.concatenate(new_X),
+        X_embeddings=np.concatenate(new_X_embeddings),
         Y=np.concatenate(new_Y),
         label_ids=np.concatenate(new_label_ids),
         tags=np.concatenate(new_tags),
@@ -221,18 +240,26 @@ def gen_batch(
         end = (batch_num + 1) * batch_size
 
         batch_x = convert_sparse_to_dense(session_data.X[start:end])
+        batch_x_embeddings = convert_sparse_to_dense(
+            session_data.X_embeddings[start:end], dtype=np.float, use_zero=True
+        )
         batch_y = convert_sparse_to_dense(session_data.Y[start:end])
         batch_tags = convert_sparse_to_dense(session_data.tags[start:end])
 
-        yield batch_x, batch_y, batch_tags
+        yield batch_x, batch_x_embeddings, batch_y, batch_tags
 
 
-def convert_sparse_to_dense(data_sparse: Union[np.ndarray, List[csr_matrix]]):
+def convert_sparse_to_dense(
+    data_sparse: Union[np.ndarray, List[csr_matrix]], dtype=np.int32, use_zero=False
+):
     data_size = len(data_sparse)
     max_seq_len = max([x.shape[0] for x in data_sparse])
     feature_len = max([x.shape[-1] for x in data_sparse])
 
-    data_dense = np.ones([data_size, max_seq_len, feature_len], dtype=np.int32) * -1
+    if use_zero:
+        data_dense = np.zeros([data_size, max_seq_len, feature_len], dtype=dtype)
+    else:
+        data_dense = np.ones([data_size, max_seq_len, feature_len], dtype=dtype) * -1
 
     for i in range(data_size):
         data_dense[i, : data_sparse[i].shape[0], :] = data_sparse[i].toarray()
@@ -255,6 +282,11 @@ def create_tf_dataset(
     else:
         shape_X = (None, None, session_data.X[0].shape[-1])
 
+    if session_data.X_embeddings[0].ndim == 1:
+        shape_X_embeddings = (None, session_data.X_embeddings[0].shape[-1])
+    else:
+        shape_X_embeddings = (None, None, session_data.X_embeddings[0].shape[-1])
+
     if session_data.Y[0].ndim == 1:
         shape_Y = (None, session_data.Y[0].shape[-1])
     else:
@@ -269,8 +301,8 @@ def create_tf_dataset(
         lambda batch_size_: gen_batch(
             session_data, batch_size_, batch_strategy, shuffle
         ),
-        output_types=(tf.float32, tf.float32, tf.int64),
-        output_shapes=(shape_X, shape_Y, shape_tags),
+        output_types=(tf.float32, tf.float32, tf.float32, tf.int64),
+        output_shapes=(shape_X, shape_X_embeddings, shape_Y, shape_tags),
         args=([batch_size]),
     )
 
@@ -417,6 +449,7 @@ def create_t2t_hparams(
 # noinspection PyPep8Naming
 def create_t2t_transformer_encoder(
     x_in: "tf.Tensor",
+    pretrained_embeddings: "tf.Tensor",
     mask: "tf.Tensor",
     attention_weights: Dict[Text, "tf.Tensor"],
     hparams: "HParams",
@@ -426,6 +459,9 @@ def create_t2t_transformer_encoder(
     """Create t2t transformer encoder."""
 
     with tf.variable_scope("transformer", reuse=tf.AUTO_REUSE):
+        x_in = tf.concat([x_in, pretrained_embeddings], axis=-1)
+        x_in = tf.contrib.layers.layer_norm(x_in)
+
         x = create_tf_fnn(
             x_in,
             [hparams.hidden_size],
@@ -439,6 +475,7 @@ def create_t2t_transformer_encoder(
                 0.0, hparams.hidden_size ** -0.5
             ),
         )
+
         if hparams.multiply_embedding_mode == "sqrt_depth":
             x *= hparams.hidden_size ** 0.5
 

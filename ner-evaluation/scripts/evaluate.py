@@ -76,13 +76,14 @@ COMBINED_PIPELINE = [
     {
         "name": "CountVectorsFeaturizer",
         "embeddings_from_flair": [],
-        "analyzer": "word",
+        "analyzer": "char_wb",
         "min_ngram": 1,
-        "max_ngram": 1,
+        "max_ngram": 4,
     },
     {
         "name": "EmbeddingIntentClassifier",
         "epochs": 5,
+        "hidden_layers_sizes_a": [],
         "unidirectional_encoder": False,
         "named_entity_recognition": True,
         "intent_classification": True,

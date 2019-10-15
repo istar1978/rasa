@@ -347,10 +347,19 @@ class CountVectorsFeaturizer(Featurizer):
                 MESSAGE_VECTOR_FEATURE_NAMES[attribute],
                 self._combine_with_existing_features(
                     example,
-                    attribute_features[i],
+                    attribute_features[i][0],
                     MESSAGE_VECTOR_FEATURE_NAMES[attribute],
                 ),
             )
+
+        if attribute == "text":
+            for i, example in enumerate(training_data.training_examples):
+                example.set(
+                    "flair-embeddings",
+                    self._combine_with_existing_features(
+                        example, attribute_features[i][1], "flair-embeddings"
+                    ),
+                )
 
     def _get_all_attributes_processed_texts(
         self, training_data: "TrainingData"
@@ -521,12 +530,12 @@ class CountVectorsFeaturizer(Featurizer):
         for i, tokens in enumerate(texts):
             x = self.vectorizers[attribute].transform(tokens)
             x.sort_indices()
-            x = self.add_flair_embeddings(tokens, x)
-            X.append(x)
+            y = self.add_flair_embeddings(tokens)
+            X.append((x, y))
 
         return X
 
-    def add_flair_embeddings(self, tokens: List[Text], x: csr_matrix):
+    def add_flair_embeddings(self, tokens: List[Text]):
         if self.stacked_embeddings is not None:
             sentence = Sentence(" ".join(tokens), use_tokenizer=False)
 
@@ -535,13 +544,9 @@ class CountVectorsFeaturizer(Featurizer):
             y = csr_matrix([t.embedding.cpu().numpy() for t in sentence])
             y.sort_indices()
 
-            if x.shape[0] == y.shape[0]:
-                x = hstack([x, y])
+            return y
 
-            if self.use_only_embeddings:
-                return y
-
-        return x
+        return csr_matrix([[] for t in tokens])
 
     def train(
         self, training_data: TrainingData, cfg: RasaNLUModelConfig = None, **kwargs: Any
@@ -601,8 +606,14 @@ class CountVectorsFeaturizer(Featurizer):
                 MESSAGE_VECTOR_FEATURE_NAMES[attribute],
                 self._combine_with_existing_features(
                     message,
-                    features[0],
+                    features[0][0],
                     feature_name=MESSAGE_VECTOR_FEATURE_NAMES[attribute],
+                ),
+            )
+            message.set(
+                "flair-embeddings",
+                self._combine_with_existing_features(
+                    message, features[0][1], feature_name="flair-embeddings"
                 ),
             )
 

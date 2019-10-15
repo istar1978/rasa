@@ -1,5 +1,4 @@
 import logging
-import tempfile
 
 import numpy as np
 import os
@@ -9,7 +8,7 @@ from scipy.sparse import csr_matrix
 from typing import Any, Dict, List, Optional, Text, Tuple
 import warnings
 
-from nlu.plotter import Plotter
+from rasa.nlu.plotter import Plotter
 from rasa.nlu.extractors import EntityExtractor
 from rasa.nlu.test import determine_token_labels
 from rasa.nlu.tokenizers import Token
@@ -27,7 +26,7 @@ import tensorflow as tf
 from tf_metrics import precision, recall, f1
 
 # avoid warning println on contrib import - remove for tf 2
-from utils.io import create_temporary_file
+from rasa.utils.io import create_temporary_file
 
 tf.contrib._warning = None
 
@@ -71,7 +70,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         # nn architecture
         # sizes of hidden layers before the embedding layer for input words
         # the number of hidden layers is thus equal to the length of this list
-        "hidden_layers_sizes_a": [256, 128],
+        "hidden_layers_sizes_a": [],
         # sizes of hidden layers before the embedding layer for intent labels
         # the number of hidden layers is thus equal to the length of this list
         "hidden_layers_sizes_b": [],
@@ -151,6 +150,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         message_placeholder: Optional["tf.Tensor"] = None,
         label_placeholder: Optional["tf.Tensor"] = None,
         tag_placeholder: Optional["tf.Tensor"] = None,
+        pretrained_embeddings: Optional["tf.Tensor"] = None,
         similarity_all: Optional["tf.Tensor"] = None,
         intent_prediction: Optional["tf.Tensor"] = None,
         tag_prediction: Optional["tf.Tensor"] = None,
@@ -178,6 +178,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.session = session
         self.graph = graph
         self.a_in = message_placeholder
+        self.pretrained_embeddings = pretrained_embeddings
         self.b_in = label_placeholder
         self.c_in = tag_placeholder
         self.sim_all = similarity_all
@@ -448,6 +449,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
     ) -> "train_utils.SessionData":
         """Prepare data for training and create a SessionData object"""
         X = []
+        X_embeddings = []
         Y = []
         label_ids = []
         tags = []
@@ -455,6 +457,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
         for e in training_data.training_examples:
             features = e.get(MESSAGE_VECTOR_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE])
             X.append(features)
+            features = e.get("flair-embeddings")
+            X_embeddings.append(features)
             # every example should have an intent
             label_ids.append(label_id_dict[e.get(MESSAGE_INTENT_ATTRIBUTE)])
 
@@ -468,6 +472,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
             tags.append(csr_matrix(np.array([_tags]).T))
 
         X = np.array(X)
+        X_embeddings = np.array(X_embeddings)
         label_ids = np.array(label_ids)
         tags = np.array(tags)
 
@@ -475,7 +480,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
             Y.append(self._encoded_all_label_ids[label_id_idx])
         Y = np.array(Y)
 
-        return train_utils.SessionData(X=X, Y=Y, label_ids=label_ids, tags=tags)
+        return train_utils.SessionData(
+            X=X, X_embeddings=X_embeddings, Y=Y, label_ids=label_ids, tags=tags
+        )
 
     # tf helpers:
     def _create_tf_embed_fnn(
@@ -511,12 +518,16 @@ class EmbeddingIntentClassifier(EntityExtractor):
         # a_in is tensor of batch-size x seq-len x feature-len for text
         # b_in is tensor of batch-size x 1 x feature-len for labels
         # c_in is tensor of batch-size x seq-len x 1
-        self.a_in, self.b_in, self.c_in = self._iterator.get_next()
+        self.a_in, self.pretrained_embeddings, self.b_in, self.c_in = (
+            self._iterator.get_next()
+        )
 
         intent_loss = intent_metric = ner_loss = ner_metric = tf.constant(0.0)
 
         # transformer
-        self.message_embed, mask = self._create_tf_sequence(self.a_in)
+        self.message_embed, mask = self._create_tf_sequence(
+            self.a_in, self.pretrained_embeddings
+        )
 
         if self.intent_classification:
             last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
@@ -633,7 +644,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
             return crf_params, logits, pred_ids
 
-    def _create_tf_sequence(self, a_in) -> Tuple["tf.Tensor", "tf.Tensor"]:
+    def _create_tf_sequence(
+        self, a_in, pretrained_embeddings
+    ) -> Tuple["tf.Tensor", "tf.Tensor"]:
         """Create sequence level embedding and mask."""
 
         # mask different length sequences
@@ -662,7 +675,13 @@ class EmbeddingIntentClassifier(EntityExtractor):
         )
 
         a = train_utils.create_t2t_transformer_encoder(
-            a_in, mask, self.attention_weights, hparams, self.C2, self._is_training
+            a_in,
+            pretrained_embeddings,
+            mask,
+            self.attention_weights,
+            hparams,
+            self.C2,
+            self._is_training,
         )
 
         return a, mask
@@ -673,12 +692,17 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.a_in = tf.placeholder(
             tf.float32, (None, None, session_data.X[0].shape[-1]), name="a"
         )
+        self.pretrained_embeddings = tf.placeholder(
+            tf.float32, (None, None, session_data.X_embeddings[0].shape[-1]), name="e"
+        )
         self.b_in = tf.placeholder(
             tf.float32, (None, None, session_data.Y[0].shape[-1]), name="b"
         )
         self.c_in = tf.placeholder(tf.int64, (None, None, None), name="c")
 
-        self.message_embed, mask = self._create_tf_sequence(self.a_in)
+        self.message_embed, mask = self._create_tf_sequence(
+            self.a_in, self.pretrained_embeddings
+        )
 
         if self.intent_classification:
             last = mask * tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
@@ -875,9 +899,14 @@ class EmbeddingIntentClassifier(EntityExtractor):
 
     # process helpers
     # noinspection PyPep8Naming
-    def _calculate_message_sim(self, X: np.ndarray) -> Tuple[np.ndarray, List[float]]:
+    def _calculate_message_sim(
+        self, X: np.ndarray, X_embeddings: np.ndarray
+    ) -> Tuple[np.ndarray, List[float]]:
         """Calculate message similarities"""
-        message_sim = self.session.run(self.intent_prediction, feed_dict={self.a_in: X})
+        message_sim = self.session.run(
+            self.intent_prediction,
+            feed_dict={self.a_in: X, self.pretrained_embeddings: X_embeddings},
+        )
 
         message_sim = message_sim.flatten()  # sim is a matrix
 
@@ -901,9 +930,14 @@ class EmbeddingIntentClassifier(EntityExtractor):
             X = X_sparse.toarray()
             X = np.expand_dims(X, axis=0)
 
+            X_embeddings_sparse = message.get("flair-embeddings")
+            X_embeddings = X_embeddings_sparse.toarray()
+            X_embeddings = np.expand_dims(X_embeddings, axis=0)
+
             # load tf graph and session
             predictions = self.session.run(
-                self.tag_prediction, feed_dict={self.a_in: X}
+                self.tag_prediction,
+                feed_dict={self.a_in: X, self.pretrained_embeddings: X_embeddings},
             )
 
             tags = [self.inverted_tag_dict[p] for p in predictions[0]]
@@ -965,8 +999,12 @@ class EmbeddingIntentClassifier(EntityExtractor):
             X = X_sparse.toarray()
             X = np.expand_dims(X, axis=0)
 
+            X_embeddings_sparse = message.get("flair-embeddings")
+            X_embeddings = X_embeddings_sparse.toarray()
+            X_embeddings = np.expand_dims(X_embeddings, axis=0)
+
             # load tf graph and session
-            label_ids, message_sim = self._calculate_message_sim(X)
+            label_ids, message_sim = self._calculate_message_sim(X, X_embeddings)
 
             # if X contains all zeros do not predict some label
             if X.any() and label_ids.size > 0:
@@ -1023,6 +1061,11 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 raise
         with self.graph.as_default():
             train_utils.persist_tensor("message_placeholder", self.a_in, self.graph)
+            train_utils.persist_tensor(
+                "pretrained_embeddings_placeholder",
+                self.pretrained_embeddings,
+                self.graph,
+            )
             train_utils.persist_tensor("label_placeholder", self.b_in, self.graph)
             train_utils.persist_tensor("tag_placeholder", self.c_in, self.graph)
 
@@ -1088,6 +1131,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 saver.restore(session, checkpoint)
 
                 a_in = train_utils.load_tensor("message_placeholder")
+                pretrained_embeddings = train_utils.load_tensor(
+                    "pretrained_embeddings_placeholder"
+                )
                 b_in = train_utils.load_tensor("label_placeholder")
                 c_in = train_utils.load_tensor("tag_placeholder")
 
@@ -1120,6 +1166,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 session=session,
                 graph=graph,
                 message_placeholder=a_in,
+                pretrained_embeddings=pretrained_embeddings,
                 label_placeholder=b_in,
                 tag_placeholder=c_in,
                 similarity_all=sim_all,
