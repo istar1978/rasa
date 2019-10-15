@@ -60,9 +60,6 @@ class Plotter(object):
                             float(row[INTENT_SCORE])
                         )
 
-                if row[INTENT_SCORE] != "_":
-                    training_curves["intent"]["score"].append(float(row[INTENT_SCORE]))
-
         return training_curves
 
     def plot_training_curves(
