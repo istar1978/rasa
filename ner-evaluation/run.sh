@@ -38,8 +38,8 @@ for filename in $FILES; do
     mkdir -p $NAME
     cd $NAME
 
-    rasa train nlu --nlu "../$config_data_train_file" --config "../$filename" > "train.log"
-    rasa test nlu --nlu "../$config_data_test_file" --config "../$filename" > "test.log"
+    rasa train nlu --nlu "../$config_data_train_file" --config "../$filename" &>> "train.log"
+    rasa test nlu --nlu "../$config_data_test_file" --config "../$filename" &>> "test.log"
 
     python ../nlu_benchmark/evaluation.py -i results/hermit_eval.json
 

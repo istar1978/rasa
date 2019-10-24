@@ -1,0 +1,1046 @@
+[
+  {
+    "text": "does rasa works in spanish",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "language",
+        "start": 19,
+        "end": 26,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "spanish"
+      }
+    ]
+  },
+  {
+    "text": "does Rasa support other languages like spanish?",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "language",
+        "start": 39,
+        "end": 46,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "spanish"
+      }
+    ]
+  },
+  {
+    "text": "are you full open source",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "product",
+        "start": 8,
+        "end": 12,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "full"
+      }
+    ]
+  },
+  {
+    "text": "you have speech recognition?",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "nlu_part",
+        "start": 16,
+        "end": 27,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "recognition"
+      }
+    ]
+  },
+  {
+    "text": "whats new",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "user_type",
+        "start": 6,
+        "end": 9,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "new"
+      }
+    ]
+  },
+  {
+    "text": "whats the weather like tomorrowtomorrow?",
+    "entities": [
+      {
+        "start": 23,
+        "end": 31,
+        "value": "tomorrow",
+        "entity": "DATE"
+      },
+      {
+        "start": 31,
+        "end": 39,
+        "value": "2018-06-07T00:00:00.000-07:00",
+        "entity": "time"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "What is my full name?",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "product",
+        "start": 11,
+        "end": 15,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "full"
+      }
+    ]
+  },
+  {
+    "text": "what is rasa ?",
+    "entities": [
+      {
+        "start": 8,
+        "end": 12,
+        "value": "rasa",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "sign me up, my email is linda@linda.com",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "email",
+        "start": 24,
+        "end": 39,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "linda@linda.com"
+      }
+    ]
+  },
+  {
+    "text": "BCG brazil",
+    "entities": [
+      {
+        "start": 0,
+        "end": 10,
+        "value": "BCG brazil",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "reddit",
+    "entities": [
+      {
+        "start": 0,
+        "end": 6,
+        "value": "reddit",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "hh@hh.hh",
+    "entities": [
+      {
+        "start": 0,
+        "end": 8,
+        "value": "hh@hh.hh",
+        "entity": "email"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "philipp company",
+    "entities": [
+      {
+        "start": 0,
+        "end": 15,
+        "value": "philipp company",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": [
+      {
+        "entity": "name",
+        "start": 0,
+        "end": 7,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "philipp"
+      }
+    ]
+  },
+  {
+    "text": "20000k",
+    "entities": [
+      {
+        "start": 0,
+        "end": 6,
+        "value": "20000000",
+        "entity": "number"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "im a freelancer",
+    "entities": [
+      {
+        "start": 5,
+        "end": 15,
+        "value": "freelancer",
+        "entity": "jobfunction"
+      }
+    ],
+    "predicted_entities": [
+      {
+        "entity": "company",
+        "start": 0,
+        "end": 15,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "im a freelancer"
+      }
+    ]
+  },
+  {
+    "text": "company: uber",
+    "entities": [
+      {
+        "start": 9,
+        "end": 13,
+        "value": "uber",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": [
+      {
+        "entity": "number",
+        "start": 9,
+        "end": 13,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "uber"
+      }
+    ]
+  },
+  {
+    "text": "head of biz deve",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "jobfunction",
+        "start": 0,
+        "end": 16,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "head of biz deve"
+      }
+    ]
+  },
+  {
+    "text": "BigBotsInc",
+    "entities": [
+      {
+        "start": 0,
+        "end": 10,
+        "value": "BigBotsInc",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "chengming@aliyun.com",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "email",
+        "start": 0,
+        "end": 20,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "chengming@aliyun.com"
+      }
+    ]
+  },
+  {
+    "text": "BCG digital ventures",
+    "entities": [
+      {
+        "start": 0,
+        "end": 20,
+        "value": "BCG digital ventures",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "Rasa",
+    "entities": [
+      {
+        "start": 0,
+        "end": 4,
+        "value": "Rasa",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "akela@rasa.com",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "email",
+        "start": 0,
+        "end": 14,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "akela@rasa.com"
+      }
+    ]
+  },
+  {
+    "text": "ACME Mops",
+    "entities": [
+      {
+        "start": 0,
+        "end": 9,
+        "value": "acme mops",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "JimJim",
+    "entities": [
+      {
+        "start": 0,
+        "end": 3,
+        "value": "jim",
+        "entity": "name"
+      },
+      {
+        "start": 3,
+        "end": 6,
+        "value": "Jim",
+        "entity": "PERSON"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "BBC",
+    "entities": [
+      {
+        "start": 0,
+        "end": 3,
+        "value": "BBC",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "150,000 USD",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "number",
+        "start": 0,
+        "end": 7,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "150,000"
+      }
+    ]
+  },
+  {
+    "text": "I'm Akela",
+    "entities": [
+      {
+        "start": 4,
+        "end": 9,
+        "value": "Akela",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "one billion",
+    "entities": [
+      {
+        "start": 0,
+        "end": 11,
+        "value": "1000000000",
+        "entity": "number"
+      }
+    ],
+    "predicted_entities": [
+      {
+        "entity": "number",
+        "start": 0,
+        "end": 3,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "one"
+      }
+    ]
+  },
+  {
+    "text": "i am a projject manager",
+    "entities": [
+      {
+        "start": 7,
+        "end": 23,
+        "value": "projject manager",
+        "entity": "jobfunction"
+      }
+    ],
+    "predicted_entities": [
+      {
+        "entity": "jobfunction",
+        "start": 16,
+        "end": 23,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "manager"
+      }
+    ]
+  },
+  {
+    "text": "Club Mate",
+    "entities": [
+      {
+        "start": 0,
+        "end": 9,
+        "value": "Club Mate",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "No company!! ",
+    "entities": [
+      {
+        "start": 0,
+        "end": 13,
+        "value": "No company!! ",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "one that will get me promoted",
+    "entities": [
+      {
+        "start": 0,
+        "end": 3,
+        "value": "1",
+        "entity": "number"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "The name of the company is Daimler",
+    "entities": [
+      {
+        "start": 27,
+        "end": 34,
+        "value": "Daimler",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "SCALABLE MINDS",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "name",
+        "start": 0,
+        "end": 14,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "SCALABLE MINDS"
+      }
+    ]
+  },
+  {
+    "text": "JennyJenny",
+    "entities": [
+      {
+        "start": 0,
+        "end": 5,
+        "value": "jenny",
+        "entity": "name"
+      },
+      {
+        "start": 5,
+        "end": 10,
+        "value": "Jenny",
+        "entity": "PERSON"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "my function is to serve butter",
+    "entities": [
+      {
+        "start": 15,
+        "end": 30,
+        "value": "to serve butter",
+        "entity": "jobfunction"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "places and names",
+    "entities": [
+      {
+        "start": 0,
+        "end": 6,
+        "value": "place",
+        "entity": "entity"
+      },
+      {
+        "start": 11,
+        "end": 16,
+        "value": "name",
+        "entity": "entity"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "dev",
+    "entities": [
+      {
+        "start": 0,
+        "end": 3,
+        "value": "dev",
+        "entity": "jobfunction"
+      }
+    ],
+    "predicted_entities": [
+      {
+        "entity": "name",
+        "start": 0,
+        "end": 3,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "dev"
+      }
+    ]
+  },
+  {
+    "text": "one bot",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "number",
+        "start": 0,
+        "end": 3,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "one"
+      }
+    ]
+  },
+  {
+    "text": "i want to extract names",
+    "entities": [
+      {
+        "start": 18,
+        "end": 23,
+        "value": "name",
+        "entity": "entity"
+      }
+    ],
+    "predicted_entities": [
+      {
+        "entity": "current_api",
+        "start": 18,
+        "end": 23,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "names"
+      }
+    ]
+  },
+  {
+    "text": "IBM",
+    "entities": [
+      {
+        "start": 0,
+        "end": 3,
+        "value": "IBM",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "asf@dsf.a",
+    "entities": [
+      {
+        "start": 0,
+        "end": 9,
+        "value": "asf@dsf.a",
+        "entity": "email"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "5 mln",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "number",
+        "start": 0,
+        "end": 1,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "5"
+      }
+    ]
+  },
+  {
+    "text": "My name is Tom",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "name",
+        "start": 11,
+        "end": 14,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "Tom"
+      }
+    ]
+  },
+  {
+    "text": "im lonely",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "name",
+        "start": 0,
+        "end": 2,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "im"
+      }
+    ]
+  },
+  {
+    "text": "custom entity",
+    "entities": [
+      {
+        "start": 0,
+        "end": 13,
+        "value": "custom entity",
+        "entity": "entity"
+      }
+    ],
+    "predicted_entities": [
+      {
+        "entity": "nlu_part",
+        "start": 7,
+        "end": 13,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "entity"
+      }
+    ]
+  },
+  {
+    "text": "COO",
+    "entities": [
+      {
+        "start": 0,
+        "end": 3,
+        "value": "COO",
+        "entity": "jobfunction"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "I want to use pip",
+    "entities": [
+      {
+        "start": 14,
+        "end": 17,
+        "value": "pip",
+        "entity": "package_manager"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "klaus klausson",
+    "entities": [
+      {
+        "start": 0,
+        "end": 14,
+        "value": "klaus klausson",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "klara health",
+    "entities": [
+      {
+        "start": 0,
+        "end": 12,
+        "value": "klara health",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "it's a small company from the US, the name is Microsoft",
+    "entities": [
+      {
+        "start": 46,
+        "end": 55,
+        "value": "Microsoft",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "Mr. Mop",
+    "entities": [
+      {
+        "start": 0,
+        "end": 7,
+        "value": "Mr. Mop",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "i'm in sales",
+    "entities": [
+      {
+        "start": 7,
+        "end": 12,
+        "value": "sales",
+        "entity": "jobfunction"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "time",
+    "entities": [
+      {
+        "start": 0,
+        "end": 4,
+        "value": "time",
+        "entity": "entity"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "Annette Niklas-Wirth",
+    "entities": [
+      {
+        "start": 0,
+        "end": 20,
+        "value": "Annette Niklas-Wirth",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "my name is jack",
+    "entities": [
+      {
+        "start": 11,
+        "end": 15,
+        "value": "jack",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "I'm a python developer",
+    "entities": [
+      {
+        "start": 6,
+        "end": 22,
+        "value": "python developer",
+        "entity": "jobfunction"
+      }
+    ],
+    "predicted_entities": [
+      {
+        "entity": "jobfunction",
+        "start": 13,
+        "end": 22,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "developer"
+      }
+    ]
+  },
+  {
+    "text": "Bolschewistische Kurkapelle Schwarz-Rot",
+    "entities": [
+      {
+        "start": 0,
+        "end": 16,
+        "value": "Bolschewistische",
+        "entity": "name"
+      },
+      {
+        "start": 17,
+        "end": 39,
+        "value": "Kurkapelle Schwarz-Rot",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "500k",
+    "entities": [
+      {
+        "start": 0,
+        "end": 4,
+        "value": "500000",
+        "entity": "number"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "Tyler",
+    "entities": [
+      {
+        "start": 0,
+        "end": 5,
+        "value": "Tyler",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "microsoft",
+    "entities": [
+      {
+        "start": 0,
+        "end": 9,
+        "value": "microsoft",
+        "entity": "company"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "my name is karthik",
+    "entities": [
+      {
+        "start": 11,
+        "end": 18,
+        "value": "karthik",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "a place",
+    "entities": [
+      {
+        "start": 2,
+        "end": 7,
+        "value": "place",
+        "entity": "entity"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "Hello Bot",
+    "entities": [
+      {
+        "start": 0,
+        "end": 9,
+        "value": "Hello Bot",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "rasa stack",
+    "entities": [
+      {
+        "start": 5,
+        "end": 10,
+        "value": "stack",
+        "entity": "product"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "Where to get Rasa Stack?",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "product",
+        "start": 18,
+        "end": 23,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "Stack"
+      }
+    ]
+  },
+  {
+    "text": "how to install rasa_nlu",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "product",
+        "start": 15,
+        "end": 23,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "rasa_nlu"
+      }
+    ]
+  },
+  {
+    "text": "Rasa NLu",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "product",
+        "start": 5,
+        "end": 8,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "NLu"
+      }
+    ]
+  },
+  {
+    "text": "i am not a developer but need this for business",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "jobfunction",
+        "start": 11,
+        "end": 20,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "developer"
+      }
+    ]
+  },
+  {
+    "text": "buy oneone akela please",
+    "entities": [
+      {
+        "start": 4,
+        "end": 7,
+        "value": "one",
+        "entity": "CARDINAL"
+      },
+      {
+        "start": 7,
+        "end": 10,
+        "value": "1",
+        "entity": "number"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "is rasa a studio?",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "name",
+        "start": 10,
+        "end": 16,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "studio"
+      }
+    ]
+  },
+  {
+    "text": "have you ever seen Shahrukh Khan?",
+    "entities": [
+      {
+        "start": 19,
+        "end": 32,
+        "value": "Shahrukh Khan",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  },
+  {
+    "text": "nl",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "name",
+        "start": 0,
+        "end": 2,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "nl"
+      }
+    ]
+  },
+  {
+    "text": "newsletter - my email is akela@rasa.com",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "email",
+        "start": 25,
+        "end": 39,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "akela@rasa.com"
+      }
+    ]
+  },
+  {
+    "text": "is rasa core able to run standalone?",
+    "entities": [],
+    "predicted_entities": [
+      {
+        "entity": "product",
+        "start": 8,
+        "end": 12,
+        "extractor": "EmbeddingIntentClassifier",
+        "value": "core"
+      }
+    ]
+  },
+  {
+    "text": "Cool. Thanks",
+    "entities": [
+      {
+        "start": 0,
+        "end": 12,
+        "value": "Cool. Thanks",
+        "entity": "name"
+      }
+    ],
+    "predicted_entities": []
+  }
+]
