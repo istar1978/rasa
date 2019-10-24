@@ -1,99 +1,58 @@
-DATA_FOLDERS=(
-  "data/AddToPlaylist"
-  "data/BookRestaurant"
-  "data/GetWeather"
-  "data/RateBook"
-  "SearchCreativeWork"
-  "SearchScreeningEvent"
-)
-PIPELINES=(
-  "combined"
-#  "tf-lstm"
-#  "tf-transformer"
-)
-TYPO=(
-  "no"
-#  "yes"
-)
-TRAIN_FRAC=(
-  "0.8"
-)
-RUNS=2
-OUTPUT="results"
+#!/bin/bash
+
+parse_yaml() {
+   local prefix=$2
+   local s='[[:space:]]*' w='[a-zA-Z0-9_]*' fs=$(echo @|tr @ '\034')
+   sed -ne "s|^\($s\)\($w\)$s:$s\"\(.*\)\"$s\$|\1$fs\2$fs\3|p" \
+        -e "s|^\($s\)\($w\)$s:$s\(.*\)$s\$|\1$fs\2$fs\3|p"  $1 |
+   awk -F$fs '{
+      indent = length($1)/2;
+      vname[indent] = $2;
+      for (i in vname) {if (i > indent) {delete vname[i]}}
+      if (length($3) > 0) {
+         vn=""; for (i=0; i<indent; i++) {vn=(vn)(vname[i])("_")}
+         printf("%s%s%s=\"%s\"\n", "'$prefix'",vn, $2, $3);
+      }
+   }'
+}
+
 REPORTING="no"
-EPOCHS=50
 
-LOG_FOLDER="logs"
-if [ -d "$LOG_FOLDER" ]; then
-    echo "$LOG_FOLDER already exists."
-else
-    mkdir $LOG_FOLDER
-fi
+FILES=$(find configs -name '*.yml')
 
-for data_folder in "${DATA_FOLDERS[@]}";
-do
-    LOCAL_DATA_FOLDER="tmp/$data_folder"
+CURRENT_EXPERIMENT=1
+ALL_EXPERIMENTS=${#FILES[@]}
 
-    NUMBER_OF_EXPERIMENTS=$((${#PIPELINES[@]} * ${#TYPO[@]} * ${#TRAIN_FRAC[@]}))
-    CURRENT_EXPERIMENT=1
-
-    LOG_FILE="$LOG_FOLDER/$(basename $data_folder)_$CURRENT_EXPERIMENT.txt"
-    if [ -f "$LOG_FILE" ]; then
-        rm $LOG_FILE
-    fi
+for filename in $FILES; do
+    NAME=$(basename "$filename" .yml)
+    echo "Running experiment $NAME ($CURRENT_EXPERIMENT/$ALL_EXPERIMENTS)."
 
     # report start of evaluation
     if [[ "$REPORTING" == "yes" ]]; then
-        NOTIFICATION="<@UGW2TPJF8> Starting evaluation on $data_folder."
+        NOTIFICATION="<@UGW2TPJF8> Starting evaluation $NAME."
         curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"$NOTIFICATION\"}" https://hooks.slack.com/services/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
     fi
 
-    # download data
-    if [ -d "$LOCAL_DATA_FOLDER" ]; then
-        echo "$LOCAL_DATA_FOLDER already exists."
-    else
-        echo "Download $LOCAL_DATA_FOLDER."
-        mkdir -p $LOCAL_DATA_FOLDER
-        gsutil cp -R gs://artifacts.rasa-research.appspot.com/ner-datasets/$data_folder $LOCAL_DATA_FOLDER
-    fi
+    eval $(parse_yaml $filename "config_")
 
-    # run evaluation
-    for pipeline in "${PIPELINES[@]}";
-        do
-            for train_frac in "${TRAIN_FRAC[@]}";
-            do
-                for typo in "${TYPO[@]}";
-                do
-                    echo "Experiment $CURRENT_EXPERIMENT/$NUMBER_OF_EXPERIMENTS on $data_folder is running."
+    mkdir -p $NAME
+    cd $NAME
 
-                    if [[ "$typo" == "yes" ]]; then
-                        python scripts/evaluate.py --typo --output $OUTPUT --runs $RUNS --epochs $EPOCHS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER > $LOG_FILE
-                    else
-                        python scripts/evaluate.py --output $OUTPUT --runs $RUNS --epochs $EPOCHS --pipeline $pipeline --train-frac $train_frac $LOCAL_DATA_FOLDER > $LOG_FILE
-                    fi
+    rasa train nlu --nlu "../$config_data_train_file" --config "../$filename" &>> "train.log"
+    rasa test nlu --nlu "../$config_data_test_file" --config "../$filename" &>> "test.log"
 
-                    if [ $? -ne 0 ]; then
-                        NOTIFICATION="<@UGW2TPJF8> Experiment $CURRENT_EXPERIMENT/$NUMBER_OF_EXPERIMENTS on $data_folder failed!"
-                        echo $NOTIFICATION
-                        if [[ "$REPORTING" == "yes" ]]; then
-                            curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"$NOTIFICATION\"}" https://hooks.slack.com/services/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
-                        fi
-                    fi
+    python ../nlu_benchmark/evaluation.py -i results/hermit_eval.json
 
-                    CURRENT_EXPERIMENT=$((CURRENT_EXPERIMENT + 1))
-                done
-            done
-        done
-
-    # remove local data
-    if [ -d "$LOCAL_DATA_FOLDER" ]; then
-        rm -r $LOCAL_DATA_FOLDER
-    fi
+    cd ..
+    mv $filename $NAME/
 
     # report end of evaluation
     if [[ "$REPORTING" == "yes" ]]; then
-        NOTIFICATION="<@UGW2TPJF8> Finished evaluation on $data_folder."
+        NOTIFICATION="<@UGW2TPJF8> Finished evaluation $NAME."
         curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"$NOTIFICATION\"}" https://hooks.slack.com/services/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
     fi
 
+    CURRENT_EXPERIMENT=$((CURRENT_EXPERIMENT + 1))
 done
+
+
