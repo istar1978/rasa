@@ -293,9 +293,9 @@ def create_tf_dataset(
         shape_Y = (None, None, session_data.Y[0].shape[-1])
 
     if session_data.tags[0].ndim == 1:
-        shape_tags = (None, None)
+        shape_tags = (None, session_data.tags[0].shape[-1])
     else:
-        shape_tags = (None, None, None)
+        shape_tags = (None, None, session_data.tags[0].shape[-1])
 
     return tf.data.Dataset.from_generator(
         lambda batch_size_: gen_batch(

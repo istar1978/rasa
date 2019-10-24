@@ -104,6 +104,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
         "embed_dim": 20,
         # the type of the similarity
         "num_neg": 20,
+        # the type of the similarity
+        "num_neg_tag": 10,
         # flag if minimize only maximum similarity over incorrect actions
         "similarity_type": "auto",  # string 'auto' or 'cosine' or 'inner'
         # the type of the loss function
@@ -138,6 +140,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
         # if true named entity recognition is trained and entities predicted
         "named_entity_recognition": True,
         "use_pretrained_embeddings": False,
+        # use crf loss
+        "use_crf_loss": False,
     }
     # end default properties (DOC MARKER - don't remove)
 
@@ -160,6 +164,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
         cls_embed: Optional["tf.Tensor"] = None,
         label_embed: Optional["tf.Tensor"] = None,
         all_labels_embed: Optional["tf.Tensor"] = None,
+        tag_embed: Optional["tf.Tensor"] = None,
+        all_tag_embed: Optional["tf.Tensor"] = None,
         attention_weights: Optional["tf.Tensor"] = None,
     ) -> None:
         """Declare instant variables with default values"""
@@ -174,6 +180,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.inverted_tag_dict = inverted_tag_dict
         # encode all label_ids with numbers
         self._encoded_all_label_ids = None
+        self._encoded_all_tag_ids = None
 
         # tf related instances
         self.session = session
@@ -193,6 +200,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.cls_embed = cls_embed
         self.label_embed = label_embed
         self.all_labels_embed = all_labels_embed
+        self.tag_embed = tag_embed
+        self.all_tag_embed = all_tag_embed
 
         # internal tf instances
         self._iterator = None
@@ -251,6 +260,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
     def _load_embedding_params(self, config: Dict[Text, Any]) -> None:
         self.embed_dim = config["embed_dim"]
         self.num_neg = config["num_neg"]
+        self.num_neg_tag = config["num_neg_tag"]
 
         self.similarity_type = config["similarity_type"]
         self.loss_type = config["loss_type"]
@@ -293,6 +303,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.use_pretrained_embeddings = self.component_config[
             "use_pretrained_embeddings"
         ]
+        self.use_crf_loss = self.component_config["use_crf_loss"]
 
     # package safety checks
     @classmethod
@@ -422,7 +433,6 @@ class EmbeddingIntentClassifier(EntityExtractor):
         training_data: "TrainingData",
         tag_id_dict: Dict[Text, int],
         attribute: Text,
-        attribute_feature_name: Text,
     ) -> np.ndarray:
         """Create matrix with tag_ids encoded in rows as bag of words. If the features
         are already computed, fetch them from the message object else compute a one
@@ -472,8 +482,14 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 _tag = determine_token_labels(
                     t, e.get(MESSAGE_ENTITIES_ATTRIBUTE), None
                 )
-                _tags.append(tag_id_dict[_tag])
-            tags.append(csr_matrix(np.array([_tags]).T))
+                if self.use_crf_loss:
+                    _tags.append(tag_id_dict[_tag])
+                else:
+                    _tags.append(self._encoded_all_tag_ids[tag_id_dict[_tag]])
+            if self.use_crf_loss:
+                tags.append(csr_matrix(np.array([_tags]).T))
+            else:
+                tags.append(csr_matrix(np.array(_tags, dtype=np.float32)))
 
         X = np.array(X)
         X_embeddings = np.array(X_embeddings)
@@ -587,17 +603,63 @@ class EmbeddingIntentClassifier(EntityExtractor):
             )
 
         if self.named_entity_recognition:
-            # get sequence lengths for NER
-            sequence_lengths = tf.cast(tf.reduce_sum(mask, 1), tf.int32)
-            if len(sequence_lengths.shape) > 1:
-                sequence_lengths = tf.squeeze(sequence_lengths)
-            sequence_lengths.set_shape([mask.shape[0]])
+            if self.use_crf_loss:
+                # get sequence lengths for NER
+                sequence_lengths = tf.cast(tf.reduce_sum(mask, 1), tf.int32)
+                if len(sequence_lengths.shape) > 1:
+                    sequence_lengths = tf.squeeze(sequence_lengths)
+                sequence_lengths.set_shape([mask.shape[0]])
 
-            self.c_in = tf.reduce_sum(tf.nn.relu(self.c_in), -1)
+                self.c_in = tf.reduce_sum(tf.nn.relu(self.c_in), -1)
 
-            ner_loss, ner_metric = self._calculate_crf_loss(
-                self.message_embed, sequence_lengths, self.c_in
-            )
+                ner_loss, ner_metric = self._calculate_crf_loss(
+                    self.message_embed, sequence_lengths, self.c_in
+                )
+            else:
+                self.a_embed = train_utils.create_tf_embed(
+                    self.message_embed,
+                    self.embed_dim,
+                    self.C2,
+                    self.similarity_type,
+                    layer_name_suffix="a",
+                )
+
+                # all_tag_ids is tensor of tag-count x 1 x feature-len for tags
+                all_tag_ids = tf.constant(
+                    self._encoded_all_tag_ids, dtype=tf.float32, name="all_tags_raw"
+                )
+                # all_tag_ids = tf.reduce_sum(tf.nn.relu(all_tag_ids), 1)
+                self.all_tag_embed = self._create_tf_embed_fnn(
+                    all_tag_ids,
+                    self.hidden_layer_sizes["c"],
+                    fnn_name="a_c" if self.share_hidden_layers else "c",
+                    embed_name="c",
+                )
+
+                # self.c_in = tf.reduce_sum(tf.nn.relu(self.c_in), 1)
+                self.c_in = tf.dtypes.cast(self.c_in, tf.float32)
+                self.tag_embed = self._create_tf_embed_fnn(
+                    self.c_in,
+                    self.hidden_layer_sizes["c"],
+                    fnn_name="a_c" if self.share_hidden_layers else "c",
+                    embed_name="c",
+                )
+
+                ner_loss, ner_metric = train_utils.calculate_loss_acc(
+                    self.a_embed,
+                    self.tag_embed,
+                    self.c_in,
+                    self.all_tag_embed,
+                    all_tag_ids,
+                    self.num_neg_tag,
+                    None,
+                    self.loss_type,
+                    self.mu_pos,
+                    self.mu_neg,
+                    self.use_max_sim_neg,
+                    self.C_emb,
+                    self.scale_loss,
+                )
 
         return intent_loss, intent_metric, ner_loss, ner_metric
 
@@ -705,7 +767,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.b_in = tf.placeholder(
             tf.float32, (None, None, session_data.Y[0].shape[-1]), name="b"
         )
-        self.c_in = tf.placeholder(tf.int64, (None, None, None), name="c")
+        self.c_in = tf.placeholder(
+            tf.int64, (None, None, session_data.tags[0].shape[-1]), name="c"
+        )
 
         if not self.use_pretrained_embeddings:
             self.pretrained_embeddings = None
@@ -754,12 +818,43 @@ class EmbeddingIntentClassifier(EntityExtractor):
             )
 
         if self.named_entity_recognition:
-            # get sequence lengths for NER
-            sequence_lengths = tf.cast(tf.reduce_sum(mask, 1), tf.int32)
+            if self.use_crf_loss:
+                # get sequence lengths for NER
+                sequence_lengths = tf.cast(tf.reduce_sum(mask, 1), tf.int32)
 
-            # predict tags
-            _, _, pred_ids = self._create_crf(self.message_embed, sequence_lengths)
-            self.tag_prediction = tf.to_int64(pred_ids)
+                # predict tags
+                _, _, pred_ids = self._create_crf(self.message_embed, sequence_lengths)
+                self.tag_prediction = tf.to_int64(pred_ids)
+            else:
+                self.a_embed = train_utils.create_tf_embed(
+                    self.message_embed,
+                    self.embed_dim,
+                    self.C2,
+                    self.similarity_type,
+                    layer_name_suffix="a",
+                )
+
+                self.sim_all = train_utils.tf_raw_sim(
+                    self.a_embed[:, tf.newaxis, :],
+                    self.all_tag_embed[tf.newaxis, :, :],
+                    None,
+                )
+
+                self.c_in = tf.dtypes.cast(self.c_in, tf.float32)
+                self.tag_embed = self._create_tf_embed_fnn(
+                    self.c_in,
+                    self.hidden_layer_sizes["c"],
+                    fnn_name="a_c" if self.share_hidden_layers else "c",
+                    embed_name="c",
+                )
+
+                # predict intents
+                self.sim = train_utils.tf_raw_sim(
+                    self.a_embed[:, tf.newaxis, :], self.tag_embed, None
+                )
+                self.tag_prediction = train_utils.confidence_from_sim(
+                    self.sim_all, self.similarity_type
+                )
 
     def check_input_dimension_consistency(self, session_data):
         if self.share_hidden_layers:
@@ -782,6 +877,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
         )
 
         self.inverted_label_dict = {v: k for k, v in label_id_dict.items()}
+        self.inverted_tag_dict = {v: k for k, v in tag_id_dict.items()}
+
         self._encoded_all_label_ids = self._create_encoded_label_ids(
             training_data,
             label_id_dict,
@@ -790,8 +887,10 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 MESSAGE_INTENT_ATTRIBUTE
             ],
         )
+        self._encoded_all_tag_ids = self._create_encoded_tag_ids(
+            training_data, tag_id_dict, attribute=MESSAGE_ENTITIES_ATTRIBUTE
+        )
 
-        self.inverted_tag_dict = {v: k for k, v in tag_id_dict.items()}
         self.num_tags = len(self.inverted_tag_dict)
 
         # check if number of negatives is less than number of label_ids
@@ -803,6 +902,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
         )
         # noinspection PyAttributeOutsideInit
         self.num_neg = min(self.num_neg, self._encoded_all_label_ids.shape[0] - 1)
+        self.num_neg_tag = min(
+            self.num_neg_tag, self._encoded_all_label_ids.shape[0] - 1
+        )
 
         session_data = self._create_session_data(
             training_data, label_id_dict, tag_id_dict
@@ -1105,6 +1207,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
             train_utils.persist_tensor(
                 "all_labels_embed", self.all_labels_embed, self.graph
             )
+            train_utils.persist_tensor("tag_embed", self.tag_embed, self.graph)
+            train_utils.persist_tensor("all_tag_embed", self.all_tag_embed, self.graph)
 
             train_utils.persist_tensor(
                 "attention_weights", self.attention_weights, self.graph
@@ -1168,6 +1272,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 cls_embed = train_utils.load_tensor("cls_embed")
                 label_embed = train_utils.load_tensor("label_embed")
                 all_labels_embed = train_utils.load_tensor("all_labels_embed")
+                tag_embed = train_utils.load_tensor("tag_embed")
+                all_tag_embed = train_utils.load_tensor("all_tag_embed")
 
                 attention_weights = train_utils.load_tensor("attention_weights")
 
@@ -1199,6 +1305,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 cls_embed=cls_embed,
                 label_embed=label_embed,
                 all_labels_embed=all_labels_embed,
+                tag_embed=tag_embed,
+                all_tag_embed=all_tag_embed,
                 attention_weights=attention_weights,
             )
 
