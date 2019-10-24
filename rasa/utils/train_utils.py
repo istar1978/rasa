@@ -62,35 +62,58 @@ def train_val_split(
     counts = np.array([label_counts[label] for label in session_data.label_ids])
 
     multi_X = session_data.X[counts > 1]
+    multi_X_embeddings = session_data.X_embeddings[counts > 1]
     multi_Y = session_data.Y[counts > 1]
     multi_label_ids = session_data.label_ids[counts > 1]
+    multi_tags = session_data.tags[counts > 1]
 
     solo_X = session_data.X[counts == 1]
+    solo_X_embeddings = session_data.X_embeddings[counts == 1]
     solo_Y = session_data.Y[counts == 1]
     solo_label_ids = session_data.label_ids[counts == 1]
+    solo_tags = session_data.tags[counts == 1]
 
-    (X_train, X_val, Y_train, Y_val, label_ids_train, label_ids_val) = train_test_split(
+    (
+        X_train,
+        X_val,
+        X_embedding_train,
+        X_embedding_val,
+        Y_train,
+        Y_val,
+        label_ids_train,
+        label_ids_val,
+        tags_train,
+        tags_val,
+    ) = train_test_split(
         multi_X,
+        multi_X_embeddings,
         multi_Y,
         multi_label_ids,
+        multi_tags,
         test_size=evaluate_on_num_examples,
         random_state=random_seed,
         stratify=multi_label_ids,
     )
     X_train = np.concatenate([X_train, solo_X])
+    X_embedding_train = np.concatenate([X_embedding_train, solo_X_embeddings])
     Y_train = np.concatenate([Y_train, solo_Y])
     label_ids_train = np.concatenate([label_ids_train, solo_label_ids])
+    tags_train = np.concatenate([tags_train, solo_tags])
 
     return (
         SessionData(
             X=X_train,
-            X_embeddings=None,
+            X_embeddings=X_embedding_train,
             Y=Y_train,
             label_ids=label_ids_train,
-            tags=None,
+            tags=tags_train,
         ),
         SessionData(
-            X=X_val, X_embeddings=None, Y=Y_val, label_ids=label_ids_val, tags=None
+            X=X_val,
+            X_embeddings=X_embedding_val,
+            Y=Y_val,
+            label_ids=label_ids_val,
+            tags=tags_val,
         ),
     )
 
@@ -893,31 +916,43 @@ def linearly_increasing_batch_size(
 
 def output_validation_stat(
     eval_init_op: "tf.Operation",
-    loss: "tf.Tensor",
-    acc: "tf.Tensor",
+    intent_loss: "tf.Tensor",
+    intent_acc: "tf.Tensor",
     session: "tf.Session",
     is_training: "tf.Session",
     batch_size_in: "tf.Tensor",
     ep_batch_size: int,
-) -> Tuple[float, float]:
+    ner_loss: "tf.Tensor",
+    ner_acc: "tf.Tensor",
+) -> Tuple[float, float, float, float]:
     """Output training statistics"""
 
     session.run(eval_init_op, feed_dict={batch_size_in: ep_batch_size})
-    ep_val_loss = 0
-    ep_val_acc = 0
+    ep_val_intent_loss = 0
+    ep_val_intent_acc = 0
+    ep_val_ner_loss = 0
+    ep_val_ner_acc = 0
     batches_per_epoch = 0
     while True:
         try:
-            batch_val_loss, batch_val_acc = session.run(
-                [loss, acc], feed_dict={is_training: False}
+            batch_val_intent_loss, batch_val_ner_loss, batch_val_intent_acc, batch_val_ner_acc = session.run(
+                [intent_loss, ner_loss, intent_acc, ner_acc],
+                feed_dict={is_training: False},
             )
             batches_per_epoch += 1
-            ep_val_loss += batch_val_loss
-            ep_val_acc += batch_val_acc
+            ep_val_intent_loss += batch_val_intent_loss
+            ep_val_intent_acc += batch_val_intent_acc
+            ep_val_ner_loss += batch_val_ner_loss
+            ep_val_ner_acc += batch_val_ner_acc
         except tf.errors.OutOfRangeError:
             break
 
-    return ep_val_loss / batches_per_epoch, ep_val_acc / batches_per_epoch
+    return (
+        ep_val_intent_loss / batches_per_epoch,
+        ep_val_intent_acc / batches_per_epoch,
+        ep_val_ner_loss / batches_per_epoch,
+        ep_val_ner_acc / batches_per_epoch,
+    )
 
 
 def train_tf_dataset(
@@ -951,8 +986,10 @@ def train_tf_dataset(
 
     train_loss = 0
     train_acc = 0
-    val_loss = 0
-    val_acc = 0
+    val_intent_loss = 0
+    val_intent_acc = 0
+    val_ner_loss = 0
+    val_ner_acc = 0
     for ep in pbar:
 
         ep_batch_size = linearly_increasing_batch_size(ep, batch_size, epochs)
@@ -994,7 +1031,7 @@ def train_tf_dataset(
 
         if eval_init_op is not None:
             if (ep + 1) % evaluate_every_num_epochs == 0 or (ep + 1) == epochs:
-                val_loss, val_acc = output_validation_stat(
+                val_intent_loss, val_intent_acc, val_ner_loss, val_ner_acc = output_validation_stat(
                     eval_init_op,
                     intent_loss,
                     intent_acc,
@@ -1002,12 +1039,16 @@ def train_tf_dataset(
                     is_training,
                     batch_size_in,
                     ep_batch_size,
+                    ner_loss,
+                    ner_acc,
                 )
 
             postfix_dict.update(
                 {
-                    "val_loss": "{:.3f}".format(val_loss),
-                    "val_acc": "{:.3f}".format(val_acc),
+                    "val_intent_loss": "{:.3f}".format(val_intent_loss),
+                    "val_intent_acc": "{:.3f}".format(val_intent_acc),
+                    "val_ner_loss": "{:.3f}".format(val_ner_loss),
+                    "val_ner_acc": "{:.3f}".format(val_ner_acc),
                 }
             )
 
@@ -1019,11 +1060,11 @@ def train_tf_dataset(
                 # make headers on first epoch
                 if ep == 0:
                     f.write(
-                        f"EPOCH\tTIMESTAMP\tINTENT_LOSS\tNER_LOSS\tINTENT_ACC\tNER_ACC"
+                        f"EPOCH\tTIMESTAMP\tINTENT_LOSS\tNER_LOSS\tINTENT_ACC\tNER_ACC\tVAL_INTENT_LOSS\tVAL_NER_LOSS\tVAL_INTENT_ACC\tVAL_NER_ACC"
                     )
 
                 f.write(
-                    f"\n{ep}\t{datetime.datetime.now():%H:%M:%S}\t{train_loss}\t{train_loss_2}\t{train_acc}\t{train_acc_2}"
+                    f"\n{ep}\t{datetime.datetime.now():%H:%M:%S}\t{train_loss}\t{train_loss_2}\t{train_acc}\t{train_acc_2}\t{val_intent_loss}\t{val_ner_loss}\t{val_intent_acc}\t{val_ner_acc}"
                 )
 
     final_message = (
@@ -1034,7 +1075,7 @@ def train_tf_dataset(
     if eval_init_op is not None:
         final_message += (
             ", validation loss={:.3f}, validation accuracy={:.3f}"
-            "".format(val_loss, val_acc)
+            "".format(val_intent_loss, val_intent_acc)
         )
     logger.info(final_message)
 

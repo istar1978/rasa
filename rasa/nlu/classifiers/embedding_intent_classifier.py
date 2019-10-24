@@ -133,7 +133,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         # how often to calculate training accuracy
         "evaluate_every_num_epochs": 20,  # small values may hurt performance
         # how many examples to use for calculation of training accuracy
-        "evaluate_on_num_examples": 0,  # large values may hurt performance
+        "evaluate_on_num_examples": 200,  # large values may hurt performance
         # model config
         # if true intent classification is trained and intent predicted
         "intent_classification": True,
