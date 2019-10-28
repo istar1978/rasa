@@ -101,7 +101,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         "num_tags": None,
         # embedding parameters
         # dimension size of embedding vectors
-        "embed_dim": 20,
+        "embed_dim": 128,
         # the type of the similarity
         "num_neg": 20,
         # the type of the similarity
@@ -131,7 +131,7 @@ class EmbeddingIntentClassifier(EntityExtractor):
         "unidirectional_encoder": True,
         # visualization of accuracy
         # how often to calculate training accuracy
-        "evaluate_every_num_epochs": 20,  # small values may hurt performance
+        "evaluate_every_num_epochs": 0,  # small values may hurt performance
         # how many examples to use for calculation of training accuracy
         "evaluate_on_num_examples": 200,  # large values may hurt performance
         # model config
@@ -157,9 +157,11 @@ class EmbeddingIntentClassifier(EntityExtractor):
         tag_placeholder: Optional["tf.Tensor"] = None,
         pretrained_embeddings: Optional["tf.Tensor"] = None,
         similarity_all: Optional["tf.Tensor"] = None,
+        similarity_all_ner: Optional["tf.Tensor"] = None,
         intent_prediction: Optional["tf.Tensor"] = None,
         tag_prediction: Optional["tf.Tensor"] = None,
         similarity: Optional["tf.Tensor"] = None,
+        similarity_ner: Optional["tf.Tensor"] = None,
         message_embed: Optional["tf.Tensor"] = None,
         cls_embed: Optional["tf.Tensor"] = None,
         label_embed: Optional["tf.Tensor"] = None,
@@ -190,9 +192,11 @@ class EmbeddingIntentClassifier(EntityExtractor):
         self.b_in = label_placeholder
         self.c_in = tag_placeholder
         self.sim_all = similarity_all
+        self.sim_all_ner = similarity_all_ner
         self.intent_prediction = intent_prediction
         self.tag_prediction = tag_prediction
         self.sim = similarity
+        self.sim_ner = similarity_ner
         self.attention_weights = attention_weights
 
         # persisted embeddings
@@ -834,26 +838,27 @@ class EmbeddingIntentClassifier(EntityExtractor):
                     layer_name_suffix="a",
                 )
 
-                self.sim_all = train_utils.tf_raw_sim(
+                self.sim_all_ner = train_utils.tf_raw_sim(
                     self.a_embed[:, tf.newaxis, :],
                     self.all_tag_embed[tf.newaxis, :, :],
                     None,
                 )
 
                 self.c_in = tf.dtypes.cast(self.c_in, tf.float32)
-                self.tag_embed = self._create_tf_embed_fnn(
+                tag_embed = self._create_tf_embed_fnn(
                     self.c_in,
                     self.hidden_layer_sizes["c"],
                     fnn_name="a_c" if self.share_hidden_layers else "c",
                     embed_name="c",
                 )
+                self.tag_embed = tf.squeeze(tag_embed)
 
                 # predict intents
-                self.sim = train_utils.tf_raw_sim(
+                self.sim_ner = train_utils.tf_raw_sim(
                     self.a_embed[:, tf.newaxis, :], self.tag_embed, None
                 )
                 self.tag_prediction = train_utils.confidence_from_sim(
-                    self.sim_all, self.similarity_type
+                    self.sim_all_ner, self.similarity_type
                 )
 
     def check_input_dimension_consistency(self, session_data):
@@ -1201,6 +1206,10 @@ class EmbeddingIntentClassifier(EntityExtractor):
             )
             train_utils.persist_tensor("similarity", self.sim, self.graph)
 
+            train_utils.persist_tensor(
+                "similarity_all_ner", self.sim_all_ner, self.graph
+            )
+            train_utils.persist_tensor("similarity_ner", self.sim_ner, self.graph)
             train_utils.persist_tensor("message_embed", self.message_embed, self.graph)
             train_utils.persist_tensor("cls_embed", self.cls_embed, self.graph)
             train_utils.persist_tensor("label_embed", self.label_embed, self.graph)
@@ -1268,6 +1277,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 tag_prediction = train_utils.load_tensor("tag_prediction")
                 sim = train_utils.load_tensor("similarity")
 
+                sim_all_ner = train_utils.load_tensor("similarity_all_ner")
+                sim_ner = train_utils.load_tensor("similarity_ner")
                 message_embed = train_utils.load_tensor("message_embed")
                 cls_embed = train_utils.load_tensor("cls_embed")
                 label_embed = train_utils.load_tensor("label_embed")
@@ -1308,6 +1319,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
                 tag_embed=tag_embed,
                 all_tag_embed=all_tag_embed,
                 attention_weights=attention_weights,
+                similarity_ner=sim_ner,
+                similarity_all_ner=sim_all_ner,
             )
 
         else:
