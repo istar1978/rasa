@@ -28,16 +28,12 @@ class Plotter(object):
     """
 
     @staticmethod
-    def _extract_evaluation_data(file_name: Text, score: str = "loss") -> dict:
+    def _extract_evaluation_data(
+        file_name: Text, score: str = "loss", ner_intent: str = "ner"
+    ) -> dict:
         training_curves = {
-            "train": {
-                "ner": {"loss": [], "score": []},
-                "intent": {"loss": [], "score": []},
-            },
-            "val": {
-                "ner": {"loss": [], "score": []},
-                "intent": {"loss": [], "score": []},
-            },
+            "train": {"loss": [], "score": []},
+            "val": {"loss": [], "score": []},
         }
 
         with open(file_name, "r") as tsvin:
@@ -48,49 +44,29 @@ class Plotter(object):
 
             score = score.upper()
 
-            TRAIN_NER_SCORE = (
-                row.index(f"TRAIN_NER_{score}") if f"TRAIN_NER_{score}" in row else None
-            )
-            TRAIN_INTENT_SCORE = (
-                row.index(f"TRAIN_INTENT_{score}")
-                if f"TRAIN_INTENT_{score}" in row
+            TRAIN_SCORE = (
+                row.index(f"{ner_intent.upper()}_{score.upper()}")
+                if f"{ner_intent.upper()}_{score.upper()}" in row
                 else None
             )
-            VAL_NER_SCORE = (
-                row.index(f"VAL_NER_{score}") if f"VAL_NER_{score}" in row else None
-            )
-            VAL_INTENT_SCORE = (
-                row.index(f"VAL_INTENT_{score}")
-                if f"VAL_INTENT_{score}" in row
+            VAL_SCORE = (
+                row.index(f"VAL_{ner_intent.upper()}_{score.upper()}")
+                if f"VAL_{ner_intent.upper()}_{score.upper()}" in row
                 else None
             )
 
             # then get all relevant values from the tsv
             for row in tsvin:
 
-                if TRAIN_NER_SCORE is not None:
-                    if row[TRAIN_NER_SCORE] != "_":
-                        training_curves["train"]["ner"]["score"].append(
-                            float(row[TRAIN_NER_SCORE])
+                if TRAIN_SCORE is not None:
+                    if row[TRAIN_SCORE] != "_":
+                        training_curves["train"]["score"].append(
+                            float(row[TRAIN_SCORE])
                         )
 
-                if TRAIN_INTENT_SCORE is not None:
-                    if row[TRAIN_INTENT_SCORE] != "_":
-                        training_curves["train"]["intent"]["score"].append(
-                            float(row[TRAIN_INTENT_SCORE])
-                        )
-
-                if VAL_NER_SCORE is not None:
-                    if row[VAL_NER_SCORE] != "_":
-                        training_curves["val"]["ner"]["score"].append(
-                            float(row[VAL_NER_SCORE])
-                        )
-
-                if VAL_INTENT_SCORE is not None:
-                    if row[VAL_INTENT_SCORE] != "_":
-                        training_curves["val"]["intent"]["score"].append(
-                            float(row[VAL_INTENT_SCORE])
-                        )
+                if VAL_SCORE is not None:
+                    if row[VAL_SCORE] != "_":
+                        training_curves["val"]["score"].append(float(row[VAL_SCORE]))
 
         return training_curves
 
@@ -108,29 +84,27 @@ class Plotter(object):
         for plot_no_1, ner_intent_value in enumerate(["ner", "intent"]):
             for plot_no_2, plot_value in enumerate(plot_values):
 
-                training_curves = self._extract_evaluation_data(file_name, plot_value)
+                training_curves = self._extract_evaluation_data(
+                    file_name, plot_value, ner_intent_value
+                )
 
                 plt.subplot(
                     len(plot_values) * 2 + 1,
                     1,
                     plot_no_1 * len(plot_values) + plot_no_2 + 1,
                 )
-                if training_curves["train"][ner_intent_value]["score"]:
-                    x = np.arange(
-                        0, len(training_curves["train"][ner_intent_value]["score"])
-                    )
+                if training_curves["train"]["score"]:
+                    x = np.arange(0, len(training_curves["train"]["score"]))
                     plt.plot(
                         x,
-                        training_curves["train"][ner_intent_value]["score"],
+                        training_curves["train"]["score"],
                         label=f"train {ner_intent_value} {plot_value}",
                     )
-                if training_curves["val"][ner_intent_value]["score"]:
-                    x = np.arange(
-                        0, len(training_curves["val"][ner_intent_value]["score"])
-                    )
+                if training_curves["val"]["score"]:
+                    x = np.arange(0, len(training_curves["val"]["score"]))
                     plt.plot(
                         x,
-                        training_curves["val"][ner_intent_value]["score"],
+                        training_curves["val"]["score"],
                         label=f"val {ner_intent_value} {plot_value}",
                     )
 
