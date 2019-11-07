@@ -43,45 +43,44 @@ class MattermostBot(MattermostAPI, OutputChannel):
         super(MattermostBot, self).__init__(url, team)
         super(MattermostBot, self).login(user, pw)
 
-    async def send_text_message(
-        self, recipient_id: Text, text: Text, **kwargs: Any
-    ) -> None:
-        for message_part in text.split("\n\n"):
-            self.post_channel(self.bot_channel, message_part)
+    async def send_response(self, recipient_id: Text, message: Dict[Text, Any]) -> None:
+        """Send a message to the user."""
 
-    async def send_custom_json(
-        self, recipient_id: Text, json_message: Dict[Text, Any], **kwargs: Any
-    ) -> None:
-        json_message.setdefault("channel_id", self.bot_channel)
-        json_message.setdefault("message", "")
-        self.post("/posts", json_message)
+        response = {
+            "channel_id": self.bot_channel,
+            "message": "",
+            "props": {},
+        }
+        if message.get("custom"):
+            self.add_custom_json(response, message.get("custom"))
+        elif message.get("buttons"):
+            self.add_text_with_buttons(
+                response, message.get("text", ""), message.get("buttons")
+            )
+        else:
+            if message.get("text"):
+                # TODO: handle multiple messages with \n\n?
+                self.add_text(response, message.get("text"))
+            if message.get("image"):
+                self.add_image(response, message.get("image"))
 
-    async def send_image_url(
-        self, recipient_id: Text, image: Text, **kwargs: Any
-    ) -> None:
-        """Sends an image."""
-        image_url = image
+        await self.post("/posts", response)
 
-        props = {"attachments": []}
+    @staticmethod
+    def add_text(response: Dict[Text, Any], text: Text) -> None:
+        response.update({"message": text})
+
+    @staticmethod
+    def add_image(response: Dict[Text, Any], image_url: Text) -> None:
+        props = response.get("props")
+        props.setdefault({"attachments": []})
         props["attachments"].append({"image_url": image_url})
 
-        json_message = {}
-        json_message.setdefault("channel_id", self.bot_channel)
-        json_message.setdefault("props", props)
+        response.update({"props": props})
 
-        self.post("/posts", json_message)
-
-    async def send_text_with_buttons(
-        self,
-        recipient_id: Text,
-        text: Text,
-        buttons: List[Dict[Text, Any]],
-        **kwargs: Any,
+    def add_text_with_buttons(
+        self, response: Dict[Text, Any], text: Text, buttons: List[Dict[Text, Any]],
     ) -> None:
-        """Sends buttons to the output."""
-
-        # buttons are a list of objects: [(option_name, payload)]
-        # See https://docs.mattermost.com/developer/interactive-messages.html#message-buttons
         button_block = {"actions": []}
         for button in buttons:
             button_block["actions"].append(
@@ -93,15 +92,17 @@ class MattermostBot(MattermostAPI, OutputChannel):
                     },
                 }
             )
-        props = {"attachments": []}
+        props = response.get("props")
+        props.setdefault({"attachments": []})
         props["attachments"].append(button_block)
 
-        json_message = {}
-        json_message.setdefault("channel_id", self.bot_channel)
-        json_message.setdefault("message", text)
-        json_message.setdefault("props", props)
+        response.update({"message": text, "props": props})
 
-        self.post("/posts", json_message)
+    @staticmethod
+    def add_custom_json(
+        response: Dict[Text, Any], json_message: Dict[Text, Any]
+    ) -> None:
+        response.update(json_message)
 
 
 class MattermostInput(InputChannel):

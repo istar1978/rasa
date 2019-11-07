@@ -131,7 +131,7 @@ class BotFramework(OutputChannel):
 
     @staticmethod
     def add_text_with_buttons(
-        response: Dict[Text, Any], text: Text, buttons: Dict[Text, Any],
+        response: Dict[Text, Any], text: Text, buttons: List[Dict[Text, Any]],
     ) -> None:
         hero_content = {
             "contentType": "application/vnd.microsoft.card.hero",
