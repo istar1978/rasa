@@ -19,81 +19,88 @@ class RocketChatBot(OutputChannel):
 
         self.rocket = RocketChat(user, password, server_url=server_url)
 
+    async def send_response(self, recipient_id: Text, message: Dict[Text, Any]) -> None:
+        """Send a message to the user."""
+
+        response = {
+            "text": "",
+            "room_id": recipient_id,
+        }
+        if message.get("custom"):
+            self.customize_response(response, message.get("custom"))
+        elif message.get("buttons"):
+            self.add_text_with_buttons(
+                response, message.get("text", ""), message.get("buttons")
+            )
+        else:
+            if message.get("text"):
+                # TODO: handle multiple messages with \n\n?
+                self.add_text(response, message.get("text"))
+            if message.get("image"):
+                self.add_image(response, message.get("image"))
+            if message.get("elements"):
+                self.add_attachments(response, message.get("elements"))
+            if message.get("attachment"):
+                self.add_attachments(response, [message.get("attachment")])
+
+        await self.rocket.__call_api_post("chat.postMessage", **response)
+
     @staticmethod
-    def _convert_to_rocket_buttons(buttons: List[Dict]) -> List[Dict]:
-        return [
-            {
-                "text": b["title"],
-                "msg": b["payload"],
-                "type": "button",
-                "msg_in_chat_window": True,
-            }
-            for b in buttons
-        ]
+    def add_text(response: Dict[Text, Any], text: Text) -> None:
+        response.update({"text": text})
 
-    async def send_text_message(
-        self, recipient_id: Text, text: Text, **kwargs: Any
+    @staticmethod
+    def add_image(response: Dict[Text, Any], image_url: Text) -> None:
+        attachments = response.get("attachments", [])
+        attachments.append({"image_url": image_url, "collapsed": False})
+
+        response.update({"attachments": attachments})
+
+    @staticmethod
+    def add_attachments(
+        response: Dict[Text, Any], attachments: Iterable[Dict[Text, Any]]
     ) -> None:
-        """Send message to output channel"""
+        response_attachments = response.get("attachments", [])
+        for attachment in attachments:
+            response_attachments.append(attachment)
 
-        for message_part in text.split("\n\n"):
-            self.rocket.chat_post_message(message_part, room_id=recipient_id)
+        response.update({"attachments": response_attachments})
 
-    async def send_image_url(
-        self, recipient_id: Text, image: Text, **kwargs: Any
+    @staticmethod
+    def add_text_with_buttons(
+        response: Dict[Text, Any], text: Text, buttons: List[Dict[Text, Any]],
     ) -> None:
-        image_attachment = [{"image_url": image, "collapsed": False}]
+        button_block = {"actions": []}
+        for button in buttons:
+            button_block["actions"].append(
+                {
+                    "text": button["title"],
+                    "msg": button["payload"],
+                    "type": "button",
+                    "msg_in_chat_window": True,
+                }
+            )
+        attachments = response.get("attachments", [])
+        attachments.append(button_block)
+        response.update({"text": text, "attachments": attachments})
 
-        return self.rocket.chat_post_message(
-            None, room_id=recipient_id, attachments=image_attachment
-        )
-
-    async def send_attachment(
-        self, recipient_id: Text, attachment: Text, **kwargs: Any
+    @staticmethod
+    def customize_response(
+        response: Dict[Text, Any], json_message: Dict[Text, Any]
     ) -> None:
-        return self.rocket.chat_post_message(
-            None, room_id=recipient_id, attachments=[attachment]
-        )
 
-    async def send_text_with_buttons(
-        self,
-        recipient_id: Text,
-        text: Text,
-        buttons: List[Dict[Text, Any]],
-        **kwargs: Any,
-    ) -> None:
-        # implementation is based on
-        # https://github.com/RocketChat/Rocket.Chat/pull/11473
-        # should work in rocket chat >= 0.69.0
-        button_attachment = [{"actions": self._convert_to_rocket_buttons(buttons)}]
-
-        return self.rocket.chat_post_message(
-            text, room_id=recipient_id, attachments=button_attachment
-        )
-
-    async def send_elements(
-        self, recipient_id: Text, elements: Iterable[Dict[Text, Any]], **kwargs: Any
-    ) -> None:
-        return self.rocket.chat_post_message(
-            None, room_id=recipient_id, attachments=elements
-        )
-
-    async def send_custom_json(
-        self, recipient_id: Text, json_message: Dict[Text, Any], **kwargs: Any
-    ) -> None:
-        text = json_message.pop("text")
-
+        remove_room_id = False
         if json_message.get("channel"):
             if json_message.get("room_id"):
                 logger.warning(
                     "Only one of `channel` or `room_id` can be passed to a RocketChat "
                     "message post. Defaulting to `channel`."
                 )
-                del json_message["room_id"]
-            return self.rocket.chat_post_message(text, **json_message)
-        else:
-            json_message.setdefault("room_id", recipient_id)
-            return self.rocket.chat_post_message(text, **json_message)
+                remove_room_id = True
+
+        response.update(json_message)
+        if remove_room_id:
+            del response["room_id"]
 
 
 class RocketChatInput(InputChannel):
