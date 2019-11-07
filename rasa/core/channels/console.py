@@ -25,7 +25,7 @@ DEFAULT_STREAM_READING_TIMEOUT_IN_SECONDS = 10
 def print_bot_output(
     message, color=cli_utils.bcolors.OKBLUE
 ) -> Optional[questionary.Question]:
-    if ("text" in message) and not ("buttons" in message):
+    if "text" in message and not "buttons" in message:
         cli_utils.print_color(message.get("text"), color=color)
 
     if "image" in message:
