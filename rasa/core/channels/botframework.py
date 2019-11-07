@@ -76,19 +76,6 @@ class BotFramework(OutputChannel):
         else:
             return BotFramework.headers
 
-    def prepare_message(
-        self, recipient_id: Text, message_data: Dict[Text, Any]
-    ) -> Dict[Text, Any]:
-        data = {
-            "type": "message",
-            "recipient": {"id": recipient_id},
-            "from": self.bot,
-            "channelData": {"notification": {"alert": "true"}},
-            "text": "",
-        }
-        data.update(message_data)
-        return data
-
     async def send(self, message_data: Dict[Text, Any]) -> None:
         post_message_uri = "{}conversations/{}/activities".format(
             self.global_uri, self.conversation["id"]
@@ -100,66 +87,63 @@ class BotFramework(OutputChannel):
 
         if not send_response.ok:
             logger.error(
-                "Error trying to send botframework messge. Response: %s",
-                send_response.text,
+                f"Error trying to send botframework message. Response: {send_response.text}",
             )
 
-    async def send_text_message(
-        self, recipient_id: Text, text: Text, **kwargs: Any
-    ) -> None:
-        for message_part in text.split("\n\n"):
-            text_message = {"text": message_part}
-            message = self.prepare_message(recipient_id, text_message)
-            await self.send(message)
+    async def send_response(self, recipient_id: Text, message: Dict[Text, Any]) -> None:
+        """Send a message to the user."""
 
-    async def send_image_url(
-        self, recipient_id: Text, image: Text, **kwargs: Any
+        response = {
+            "type": "message",
+            "recipient": {"id": recipient_id},
+            "from": self.bot,
+            "channelData": {"notification": {"alert": "true"}},
+            "text": "",
+        }
+        if message.get("custom"):
+            self.add_custom_json(response, message.get("custom"))
+        elif message.get("buttons"):
+            self.add_text_with_buttons(
+                response, message.get("text", ""), message.get("buttons")
+            )
+        else:
+            if message.get("text"):
+                # TODO: handle multiple messages with \n\n?
+                self.add_text(response, message.get("text"))
+            if message.get("image"):
+                self.add_image(response, message.get("image"))
+
+        await self.send(response)
+
+    @staticmethod
+    def add_text(response: Dict[Text, Any], text: Text) -> None:
+        response.update({"text": text})
+
+    @staticmethod
+    def add_image(response: Dict[Text, Any], image_url: Text) -> None:
+        hero_content = {
+            "contentType": "application/vnd.microsoft.card.hero",
+            "content": {"images": [{"url": image_url}]},
+        }
+        attachments = response.get("attachments", [])
+        attachments.append(hero_content)
+        response.update({"attachments": attachments})
+
+    @staticmethod
+    def add_text_with_buttons(
+        response: Dict[Text, Any], text: Text, buttons: Dict[Text, Any],
     ) -> None:
         hero_content = {
             "contentType": "application/vnd.microsoft.card.hero",
-            "content": {"images": [{"url": image}]},
+            "content": {"subtitle": text, "buttons": buttons,},
         }
+        response.update({"attachments": [hero_content]})
 
-        image_message = {"attachments": [hero_content]}
-        message = self.prepare_message(recipient_id, image_message)
-        await self.send(message)
-
-    async def send_text_with_buttons(
-        self,
-        recipient_id: Text,
-        text: Text,
-        buttons: List[Dict[Text, Any]],
-        **kwargs: Any,
+    @staticmethod
+    def add_custom_json(
+        response: Dict[Text, Any], json_message: Dict[Text, Any]
     ) -> None:
-        hero_content = {
-            "contentType": "application/vnd.microsoft.card.hero",
-            "content": {"subtitle": text, "buttons": buttons},
-        }
-
-        buttons_message = {"attachments": [hero_content]}
-        message = self.prepare_message(recipient_id, buttons_message)
-        await self.send(message)
-
-    async def send_elements(
-        self, recipient_id: Text, elements: Iterable[Dict[Text, Any]], **kwargs: Any
-    ) -> None:
-        for e in elements:
-            message = self.prepare_message(recipient_id, e)
-            await self.send(message)
-
-    async def send_custom_json(
-        self, recipient_id: Text, json_message: Dict[Text, Any], **kwargs: Any
-    ) -> None:
-        # pytype: disable=attribute-error
-        json_message.setdefault("type", "message")
-        json_message.setdefault("recipient", {}).setdefault("id", recipient_id)
-        json_message.setdefault("from", self.bot)
-        json_message.setdefault("channelData", {}).setdefault(
-            "notification", {}
-        ).setdefault("alert", "true")
-        json_message.setdefault("text", "")
-        await self.send(json_message)
-        # pytype: enable=attribute-error
+        response.update(json_message)
 
 
 class BotFrameworkInput(InputChannel):
