@@ -101,7 +101,7 @@ class BotFramework(OutputChannel):
             "text": "",
         }
         if message.get("custom"):
-            self.add_custom_json(response, message.get("custom"))
+            response.update(message.get("custom"))
         elif message.get("buttons"):
             self.add_text_with_buttons(
                 response, message.get("text", ""), message.get("buttons")
@@ -138,12 +138,6 @@ class BotFramework(OutputChannel):
             "content": {"subtitle": text, "buttons": buttons,},
         }
         response.update({"attachments": [hero_content]})
-
-    @staticmethod
-    def add_custom_json(
-        response: Dict[Text, Any], json_message: Dict[Text, Any]
-    ) -> None:
-        response.update(json_message)
 
 
 class BotFrameworkInput(InputChannel):
