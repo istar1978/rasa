@@ -47,28 +47,26 @@ class TwilioOutput(Client, OutputChannel):
 
         return message
 
-    async def send_text_message(
-        self, recipient_id: Text, text: Text, **kwargs: Any
-    ) -> None:
-        """Sends text message"""
+    async def send_response(self, recipient_id: Text, message: Dict[Text, Any]) -> None:
+        response = {"to": recipient_id, "from": self.twilio_number, "body": ""}
+        if message.get("custom"):
+            self.customize_response(response, message.get("custom"))
+        else:
+            response.update({"body": message.get("text")})
 
-        message_data = {"to": recipient_id, "from_": self.twilio_number}
-        for message_part in text.split("\n\n"):
-            message_data.update({"body": message_part})
-            await self._send_message(message_data)
+        await self._send_message(response)
 
-    async def send_custom_json(
-        self, recipient_id: Text, json_message: Dict[Text, Any], **kwargs: Any
+    @staticmethod
+    def customize_response(
+        response: Dict[Text, Any], json_message: Dict[Text, Any]
     ) -> None:
         """Send custom json dict"""
+        response.update(json_message)
 
-        json_message.setdefault("to", recipient_id)
-        if not json_message.get("media_url"):
-            json_message.setdefault("body", "")
-        if not json_message.get("messaging_service_sid"):
-            json_message.setdefault("from", self.twilio_number)
-
-        await self._send_message(json_message)
+        if response.get("media_url"):
+            del response["body"]
+        if response.get("messaging_service_sid"):
+            del response["from"]
 
 
 class TwilioInput(InputChannel):

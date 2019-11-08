@@ -46,11 +46,7 @@ class MattermostBot(MattermostAPI, OutputChannel):
     async def send_response(self, recipient_id: Text, message: Dict[Text, Any]) -> None:
         """Send a message to the user."""
 
-        response = {
-            "channel_id": self.bot_channel,
-            "message": "",
-            "props": {},
-        }
+        response = {"channel_id": self.bot_channel, "message": "", "props": {}}
         if message.get("custom"):
             response.update(message.get("custom"))
         elif message.get("buttons"):
