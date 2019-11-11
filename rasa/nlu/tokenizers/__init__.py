@@ -5,7 +5,7 @@ class Tokenizer:
     pass
 
 
-@functools.total_ordering
+# @functools.total_ordering
 class Token:
     def __init__(self, text, offset, data=None):
         self.offset = offset
@@ -19,12 +19,12 @@ class Token:
     def get(self, prop, default=None):
         return self.data.get(prop, default)
 
-    def __eq__(self, other):
-        if not isinstance(other, Token):
-            raise NotImplementedError
-        return self.text == other.text
+    # def __eq__(self, other):
+    #     if not isinstance(other, Token):
+    #         raise NotImplementedError
+    #     return self.text == other.text
 
-    def __lt__(self, other):
-        if not isinstance(other, Token):
-            raise NotImplementedError
-        return self.text < other.text
+    # def __lt__(self, other):
+    #     if not isinstance(other, Token):
+    #         raise NotImplementedError
+    #     return self.text < other.text
