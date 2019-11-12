@@ -11,6 +11,7 @@ from rasa.utils.train_utils import (
     get_number_of_examples,
     gen_batch,
     balance_session_data,
+    scipy_matrix_to_values,
 )
 
 
@@ -27,14 +28,16 @@ async def session_data() -> SessionData:
                     np.random.rand(3, 14),
                 ]
             ),
-            np.array(
-                [
-                    scipy.sparse.csr_matrix(np.random.randint(5, size=(5, 10))),
-                    scipy.sparse.csr_matrix(np.random.randint(5, size=(2, 10))),
-                    scipy.sparse.csr_matrix(np.random.randint(5, size=(3, 10))),
-                    scipy.sparse.csr_matrix(np.random.randint(5, size=(1, 10))),
-                    scipy.sparse.csr_matrix(np.random.randint(5, size=(3, 10))),
-                ]
+            scipy_matrix_to_values(
+                np.array(
+                    [
+                        scipy.sparse.csr_matrix(np.random.randint(5, size=(5, 10))),
+                        scipy.sparse.csr_matrix(np.random.randint(5, size=(2, 10))),
+                        scipy.sparse.csr_matrix(np.random.randint(5, size=(3, 10))),
+                        scipy.sparse.csr_matrix(np.random.randint(5, size=(1, 10))),
+                        scipy.sparse.csr_matrix(np.random.randint(5, size=(3, 10))),
+                    ]
+                )
             ),
         ],
         "intent_features": [

@@ -11,7 +11,7 @@ import warnings
 from rasa.nlu.classifiers import LABEL_RANKING_LENGTH
 from rasa.nlu.components import Component
 from rasa.utils import train_utils
-from rasa.utils.train_utils import SessionData
+from rasa.utils.train_utils import SessionData, SparseData
 from rasa.nlu.constants import (
     MESSAGE_INTENT_ATTRIBUTE,
     MESSAGE_TEXT_ATTRIBUTE,
@@ -72,7 +72,7 @@ class EmbeddingIntentClassifier(Component):
         # linearly increased for each epoch
         "batch_size": [64, 256],
         # how to create batches
-        "batch_strategy": "balanced",  # string 'sequence' or 'balanced'
+        "batch_strategy": "sequence",  # string 'sequence' or 'balanced'
         # number of epochs
         "epochs": 300,
         # set random seed to any int to get reproducible results
@@ -315,6 +315,8 @@ class EmbeddingIntentClassifier(Component):
         sparse_features = np.array(sparse_features)
         dense_features = np.array(dense_features)
 
+        sparse_features = train_utils.scipy_matrix_to_values(sparse_features)
+
         return [sparse_features, dense_features]
 
     @staticmethod
@@ -415,6 +417,9 @@ class EmbeddingIntentClassifier(Component):
             mask[0 : len(e.get("tokens"))] = 1
             masks.append(mask)
 
+        X_sparse = [train_utils.scipy_matrix_to_values(np.array([x])) for x in X_sparse]
+        Y_sparse = [train_utils.scipy_matrix_to_values(np.array([y])) for y in Y_sparse]
+
         X_sparse = np.array(X_sparse)
         X_dense = np.array(X_dense)
         Y_sparse = np.array(Y_sparse)
@@ -432,7 +437,10 @@ class EmbeddingIntentClassifier(Component):
         return session_data
 
     def _add_to_session_data(
-        self, session_data: SessionData, key: Text, features: List[np.ndarray]
+        self,
+        session_data: SessionData,
+        key: Text,
+        features: List[Union[np.ndarray, SparseData]],
     ):
         if not features:
             return
@@ -440,7 +448,12 @@ class EmbeddingIntentClassifier(Component):
         session_data[key] = []
 
         for data in features:
-            if data.size > 0:
+            if data is None:
+                continue
+
+            if isinstance(data, SparseData):
+                session_data[key].append(data)
+            elif data.size > 0:
                 session_data[key].append(data)
 
     # tf helpers:

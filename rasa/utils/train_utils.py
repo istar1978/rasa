@@ -1,8 +1,18 @@
 from collections import defaultdict
 import logging
-import scipy.sparse
 import typing
-from typing import List, Optional, Text, Dict, Tuple, Union, Generator, Callable, Any
+from typing import (
+    List,
+    Optional,
+    Text,
+    Dict,
+    Tuple,
+    Union,
+    Generator,
+    Callable,
+    NamedTuple,
+    Any,
+)
 import numpy as np
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
@@ -24,8 +34,15 @@ tf.contrib._warning = None
 logger = logging.getLogger(__name__)
 
 
-# namedtuple for all tf session related data
+# alias for all tf session related data
 SessionData = Dict[Text, List[np.ndarray]]
+
+
+# namedtuple for sparse data
+class SparseData(NamedTuple):
+    indices: np.ndarray
+    data: np.ndarray
+    dense_shape: np.ndarray
 
 
 def load_tf_config(config: Dict[Text, Any]) -> Optional[tf.compat.v1.ConfigProto]:
@@ -128,18 +145,19 @@ def convert_train_test_split(
 
 
 def combine_features(
-    feature_1: Union[np.ndarray, scipy.sparse.spmatrix],
-    feature_2: Union[np.ndarray, scipy.sparse.spmatrix],
-) -> Union[np.ndarray, scipy.sparse.spmatrix]:
-    """Concatenate features."""
-    if isinstance(feature_1, scipy.sparse.spmatrix) and isinstance(
-        feature_2, scipy.sparse.spmatrix
-    ):
-        if feature_2.shape[0] == 0:
+    feature_1: Union[np.ndarray, SparseData], feature_2: Union[np.ndarray, SparseData]
+) -> Union[np.ndarray, SparseData]:
+    if isinstance(feature_1, SparseData) and isinstance(feature_2, SparseData):
+        if feature_2.dense_shape.shape[0] == 0:
             return feature_1
-        if feature_1.shape[0] == 0:
+        if feature_1.dense_shape.shape[0] == 0:
             return feature_2
-        return scipy.sparse.vstack([feature_1, feature_2])
+        # TODO
+        return SparseData(
+            np.concatenate([feature_1.indices, feature_2.indices]),
+            np.concatenate([feature_1.data, feature_2.data]),
+            feature_1.dense_shape,
+        )
 
     return np.concatenate([feature_1, feature_2])
 
@@ -156,7 +174,12 @@ def session_data_for_ids(session_data: SessionData, ids: np.ndarray):
     new_session_data = defaultdict(list)
     for k, values in session_data.items():
         for v in values:
-            new_session_data[k].append(v[ids])
+            if isinstance(v, SparseData):
+                new_session_data[k].append(
+                    SparseData(v.indices[ids], v.data[ids], v.dense_shape)
+                )
+            else:
+                new_session_data[k].append(v[ids])
     return new_session_data
 
 
@@ -245,10 +268,13 @@ def balance_session_data(
 
 
 def get_number_of_examples(session_data: SessionData):
-    """Obtain number of examples in session data.
-    Raise a ValueError if number of examples differ for different data in session data.
-    """
-    example_lengths = [v.shape[0] for values in session_data.values() for v in values]
+    example_lengths = []
+    for values in session_data.values():
+        for v in values:
+            if isinstance(v, SparseData):
+                example_lengths.append(v.dense_shape[0])
+            else:
+                example_lengths.append(v.shape[0])
 
     # check if number of examples is the same for all X
     if not all(length == example_lengths[0] for length in example_lengths):
@@ -268,6 +294,8 @@ def gen_batch(
     shuffle: bool = False,
 ) -> Generator[Tuple, None, None]:
     """Generate batches."""
+    import time
+
     if shuffle:
         session_data = shuffle_session_data(session_data)
 
@@ -280,10 +308,17 @@ def gen_batch(
     num_batches = num_examples // batch_size + int(num_examples % batch_size > 0)
 
     for batch_num in range(num_batches):
+        start_time = time.time()
         start = batch_num * batch_size
         end = start + batch_size
 
-        yield prepare_batch(session_data, start, end)
+        batch = prepare_batch(session_data, start, end)
+
+        end_time = time.time()
+
+        print(f"GEN BATCH: {end_time - start_time}")
+
+        yield batch
 
 
 def prepare_batch(
@@ -299,40 +334,52 @@ def prepare_batch(
             continue
 
         for v in values:
-            if start is not None and end is not None:
-                _data = v[start:end]
-            elif start is not None:
-                _data = v[start:]
-            elif end is not None:
-                _data = v[:end]
+            if isinstance(v, SparseData):
+                # TODO
+                for x in [v.indices, v.data, v.dense_shape]:
+                    if start is not None and end is not None:
+                        _data = x[start:end]
+                    elif start is not None:
+                        _data = x[start:]
+                    elif end is not None:
+                        _data = x[:end]
+                    else:
+                        _data = x[:]
+                    batch_data.append(x)
             else:
-                _data = v[:]
+                if start is not None and end is not None:
+                    _data = v[start:end]
+                elif start is not None:
+                    _data = v[start:]
+                elif end is not None:
+                    _data = v[:end]
+                else:
+                    _data = v[:]
 
-            if isinstance(_data[0], scipy.sparse.spmatrix):
-                batch_data = batch_data + scipy_matrix_to_values(_data)
-            else:
                 batch_data.append(pad_data(_data))
 
     # len of batch_data is equal to the number of keys in session data
     return tuple(batch_data)
 
 
-def scipy_matrix_to_values(array_of_sparse: np.ndarray) -> List[np.ndarray]:
-    """Convert a scipy matrix into inidces, data, and shape."""
+def scipy_matrix_to_values(array_of_sparse: np.ndarray) -> Optional[SparseData]:
+    if array_of_sparse.size == 0:
+        return
+
     seq_len = max([x.shape[0] for x in array_of_sparse])
     coo = [x.tocoo() for x in array_of_sparse]
-    data = [v for x in array_of_sparse for v in x.data]
 
+    data = [v for x in array_of_sparse for v in x.data]
     indices = [
         ids for i, x in enumerate(coo) for ids in zip([i] * len(x.row), x.row, x.col)
     ]
     shape = (len(array_of_sparse), seq_len, array_of_sparse[0].shape[-1])
 
-    return [
+    return SparseData(
         np.array(indices).astype(np.int64),
         np.array(data).astype(np.float64),
         np.array(shape).astype(np.int64),
-    ]
+    )
 
 
 def values_to_sparse_tensor(
@@ -383,13 +430,13 @@ def batch_to_session_data(
 
     for k, values in session_data.items():
         for v in values:
-            if isinstance(v[0], scipy.sparse.spmatrix):
+            if isinstance(v, SparseData):
                 # explicitly substitute last dimension in shape with known static value
                 batch_data[k].append(
                     values_to_sparse_tensor(
                         batch[idx],
                         batch[idx + 1],
-                        [batch[idx + 2][0], batch[idx + 2][1], v[0].shape[-1]],
+                        [batch[idx + 2][0], batch[idx + 2][1], v.dense_shape[-1]],
                     )
                 )
                 idx += 3
@@ -428,11 +475,11 @@ def get_shapes_types(session_data: SessionData) -> Tuple:
     shapes = []
 
     def append_shape(v: np.ndarray):
-        if isinstance(v[0], scipy.sparse.spmatrix):
+        if isinstance(v, SparseData):
             # scipy matrix is converted into indices, data, shape
-            shapes.append((None, v[0].ndim + 1))
+            shapes.append((None, v.indices.shape[-1]))
             shapes.append((None))
-            shapes.append((v[0].ndim + 1))
+            shapes.append((v.dense_shape.shape[-1]))
         elif v[0].ndim == 0:
             shapes.append((None))
         elif v[0].ndim == 1:
@@ -441,11 +488,11 @@ def get_shapes_types(session_data: SessionData) -> Tuple:
             shapes.append((None, None, v[0].shape[-1]))
 
     def append_type(v: np.ndarray):
-        if isinstance(v[0], scipy.sparse.spmatrix):
+        if isinstance(v, SparseData):
             # scipy matrix is converted into indices, data, shape
-            types.append(tf.int64)
-            types.append(tf.float64)
-            types.append(tf.int64)
+            types.append(v.indices.dtype)
+            types.append(v.data.dtype)
+            types.append(v.dense_shape.dtype)
         else:
             types.append(v[0].dtype)
 
