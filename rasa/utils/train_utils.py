@@ -324,7 +324,7 @@ def prepare_batch(
 
 def scipy_matrix_to_values(array_of_sparse: np.ndarray) -> List[np.ndarray]:
     """Convert a scipy matrix into inidces, data, and shape."""
-    seq_len = max([x.shape[0] for x in array_of_sparse])
+    max_seq_len = max([x.shape[0] for x in array_of_sparse])
     if not isinstance(array_of_sparse[0], scipy.sparse.coo_matrix):
         coo = [x.tocoo() for x in array_of_sparse]
     else:
@@ -334,12 +334,32 @@ def scipy_matrix_to_values(array_of_sparse: np.ndarray) -> List[np.ndarray]:
     indices = [
         ids for i, x in enumerate(coo) for ids in zip([i] * len(x.row), x.row, x.col)
     ]
-    shape = (len(array_of_sparse), seq_len, array_of_sparse[0].shape[-1])
+
+    indices_pad = [
+        ids
+        for i, x in enumerate(coo)
+        for ids in zip(
+            [i] * (max_seq_len - x.shape[0]),
+            range(x.shape[0], max_seq_len),
+            [x.shape[1]] * (max_seq_len - x.shape[0]),
+        )
+    ]
+
+    indices += indices_pad
+
+    data += [1] * len(indices_pad)
+
+    indices, data = zip(*sorted(zip(indices, data), key=lambda x: x[0]))
+
+    lookup_data = np.reshape(np.array(indices)[:, -1], (len(indices),))
+
+    shape = (len(array_of_sparse), max_seq_len, array_of_sparse[0].shape[-1] + 1)
 
     return [
         np.array(indices).astype(np.int64),
         np.array(data).astype(np.float64),
         np.array(shape).astype(np.int64),
+        lookup_data.astype(np.int64),
     ]
 
 
@@ -400,11 +420,18 @@ def batch_to_session_data(
                     values_to_sparse_tensor(
                         batch[idx],
                         batch[idx + 1],
-                        [batch[idx + 2][0], batch[idx + 2][1], v[0].shape[-1]],
+                        [batch[idx + 2][0], batch[idx + 2][1], v[0].shape[-1] + 1],
                     )
                 )
-                idx += 3
-                tuple_sizes[k] += 3
+                batch_data[k].append(
+                    values_to_sparse_tensor(
+                        batch[idx],
+                        batch[idx + 3],
+                        [batch[idx + 2][0], batch[idx + 2][1], v[0].shape[-1] + 1],
+                    )
+                )
+                idx += 4
+                tuple_sizes[k] += 4
             else:
                 batch_data[k].append(batch[idx])
                 idx += 1
@@ -446,6 +473,7 @@ def get_shapes_types(session_data: SessionData) -> Tuple:
             shapes.append((None, v[0].ndim + 1))
             shapes.append((None))
             shapes.append((v[0].ndim + 1))
+            shapes.append((None))
         elif v[0].ndim == 0:
             shapes.append((None))
         elif v[0].ndim == 1:
@@ -458,6 +486,7 @@ def get_shapes_types(session_data: SessionData) -> Tuple:
             # scipy matrix is converted into indices, data, shape
             types.append(tf.int64)
             types.append(tf.float64)
+            types.append(tf.int64)
             types.append(tf.int64)
         else:
             types.append(v[0].dtype)
@@ -780,32 +809,43 @@ def tf_dense_layer_for_sparse(
     https://medium.com/dailymotion/how-to-design-deep-learning-models-with-sparse-inputs-in-tensorflow-keras-fd5e754abec1
     """
 
-    if not isinstance(inputs, tf.SparseTensor):
-        raise
+    # if not isinstance(inputs, tf.SparseTensor):
+    #     raise
 
     with tf.variable_scope("dense_layer_for_sparse_" + name, reuse=tf.AUTO_REUSE):
         kernel_regularizer = tf.contrib.layers.l2_regularizer(C2)
         kernel = tf.get_variable(
             "kernel",
-            shape=[inputs.shape[-1], units],
-            dtype=inputs.dtype,
+            shape=[inputs[0].shape[-1], units],
+            dtype=inputs[0].dtype,
             regularizer=kernel_regularizer,
         )
-        bias = tf.get_variable("bias", shape=[units], dtype=inputs.dtype)
+        bias = tf.get_variable("bias", shape=[units], dtype=inputs[0].dtype)
+        print("----")
+        print(inputs[0].shape, inputs[1].shape)
 
+        w = tf.sparse.reshape(inputs[0], [-1, int(inputs[0].shape[-1])])
+        i = tf.sparse.reshape(inputs[1], [-1, int(inputs[0].shape[-1])])
+        print(w.shape)
+        print(i.shape)
         # outputs will be 2D
-        outputs = tf.sparse.matmul(
-            tf.sparse.reshape(inputs, [-1, tf.shape(inputs)[-1]]), kernel
-        )
+        # outputs = tf.sparse.matmul(
+        #     w, kernel
+        # )
+        outputs = tf.nn.embedding_lookup_sparse(kernel, i, sp_weights=w, combiner="sum")
+        print(kernel.get_shape(), outputs.shape)
+
+        # exit(0)
         # outputs = tf.matmul(
         #     tf.reshape(tf.sparse.to_dense(inputs, validate_indices=False), [-1, tf.shape(inputs)[-1]]), kernel, a_is_sparse=True
         # )
 
-        if len(inputs.shape) == 3:
+        if len(inputs[0].shape) == 3:
             # reshape back
             outputs = tf.reshape(
-                outputs, (tf.shape(inputs)[0], tf.shape(inputs)[1], -1)
+                outputs, (tf.shape(inputs[0])[0], tf.shape(inputs[0])[1], -1)
             )
+            print(outputs.shape)
 
         if use_bias:
             outputs = tf.nn.bias_add(outputs, bias)
@@ -1145,8 +1185,12 @@ def train_tf_dataset(
     evaluate_every_num_epochs: int,
 ) -> None:
     """Train tf graph"""
+    from tensorflow.python.client import timeline
 
     session.run(tf.global_variables_initializer())
+
+    options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+    run_metadata = tf.RunMetadata()
 
     if evaluate_on_num_examples:
         logger.info(
@@ -1168,17 +1212,32 @@ def train_tf_dataset(
         ep_train_loss = 0
         ep_train_acc = 0
         batches_per_epoch = 0
+        index = 0
         while True:
             try:
-                _, batch_train_loss, batch_train_acc = session.run(
-                    [train_op, loss, acc], feed_dict={is_training: True}
-                )
+                if index == 5:
+                    _, batch_train_loss, batch_train_acc = session.run(
+                        [train_op, loss, acc],
+                        feed_dict={is_training: True},
+                        options=options,
+                        run_metadata=run_metadata,
+                    )
+                else:
+                    _, batch_train_loss, batch_train_acc = session.run(
+                        [train_op, loss, acc], feed_dict={is_training: True}
+                    )
                 batches_per_epoch += 1
                 ep_train_loss += batch_train_loss
                 ep_train_acc += batch_train_acc
+                index += 1
 
             except tf.errors.OutOfRangeError:
                 break
+
+        fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+        chrome_trace = fetched_timeline.generate_chrome_trace_format()
+        with open("timeline_01_sparse_embed_lookup.json", "w") as f:
+            f.write(chrome_trace)
 
         train_loss = ep_train_loss / batches_per_epoch
         train_acc = ep_train_acc / batches_per_epoch

@@ -555,13 +555,16 @@ class EmbeddingIntentClassifier(Component):
                 dense_dim = f.shape[-1]
                 break
 
-        for f in features:
-            if isinstance(f, tf.SparseTensor):
-                dense_features.append(
-                    train_utils.tf_dense_layer_for_sparse(f, dense_dim, name, self.C2)
-                )
-            else:
-                dense_features.append(f)
+        # for f in features:
+        #     if isinstance(f, tf.SparseTensor):
+        #         dense_features.append(
+        #             train_utils.tf_dense_layer_for_sparse(f, dense_dim, name, self.C2)
+        #         )
+        #     else:
+        #         dense_features.append(f)
+        dense_features.append(
+            train_utils.tf_dense_layer_for_sparse(features, dense_dim, name, self.C2)
+        )
 
         output = tf.concat(dense_features, axis=-1)
         # apply mean to convert sequence to sentence features
