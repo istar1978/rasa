@@ -105,24 +105,3 @@ def test_print_error_and_exit():
     with pytest.raises(SystemExit):
         rasa.cli.utils.print_error_and_exit("")
 
-
-def test_logging_capture(caplog: LogCaptureFixture):
-    logger = logging.getLogger(__name__)
-
-    # make a random INFO log and ensure it passes decorator
-    info_text = "SOME INFO"
-    logger.info(info_text)
-    with assert_log_emitted(caplog, logger.name, logging.INFO, info_text):
-        pass
-
-
-def test_logging_capture_failure(caplog: LogCaptureFixture):
-    logger = logging.getLogger(__name__)
-
-    # make a random INFO log
-    logger.info("SOME INFO")
-
-    # test for string in log that wasn't emitted
-    with pytest.raises(AssertionError):
-        with assert_log_emitted(caplog, logger.name, logging.INFO, "NONONO"):
-            pass
