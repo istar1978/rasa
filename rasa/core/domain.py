@@ -201,34 +201,81 @@ class Domain:
             slots.append(slot)
         return slots
 
-    @staticmethod
-    def collect_intent_properties(
-        intents: List[Union[Text, Dict[Text, Any]]]
+    def collect_intents(
+        self,
+        intents: Union[Set[Text], List[Union[Text, Dict[Text, Any]]]],
+        entities: List[Text],
     ) -> Dict[Text, Dict[Text, Union[bool, List]]]:
-        intent_properties = {}
+        full_intents = {}
         for intent in intents:
             if isinstance(intent, dict):
-                name = list(intent.keys())[0]
-                for properties in intent.values():
-                    properties.setdefault("use_entities", True)
-                    properties.setdefault("ignore_entities", [])
-                    if (
-                        properties["use_entities"] is None
-                        or properties["use_entities"] is False
-                    ):
-                        properties["use_entities"] = []
-            else:
-                name = intent
-                intent = {intent: {"use_entities": True, "ignore_entities": []}}
+                intent_name = list(intent.keys())[0]
+                featurized_entities = self.featurized_entities_for_intent(
+                    intent, entities
+                )
+                intent[intent_name].update({"featurized_entities": featurized_entities})
 
-            if name in intent_properties.keys():
+            else:
+                intent_name = intent
+                intent = {
+                    intent_name: {
+                        "featurized_entities": {entity for entity in entities}
+                    }
+                }
+
+            if intent_name in full_intents.keys():
                 raise InvalidDomain(
-                    "Intents are not unique! Found two intents with name '{}'. "
-                    "Either rename or remove one of them.".format(name)
+                    f"Intents are not unique! Found two intents with name '{intent_name}'. "
+                    "Either rename or remove one of them."
                 )
 
-            intent_properties.update(intent)
-        return intent_properties
+            full_intents.update(intent)
+        return full_intents
+
+    @staticmethod
+    def set_default_intent_properties(
+        properties: Dict[Text, Any], entities: List[Text]
+    ) -> Dict[Text, Any]:
+        """Some explanatory docstring"""
+
+        if not properties.get("use_entities") or properties.get("use_entities") is True:
+            properties["use_entities"] = [entity for entity in entities]
+        elif properties.get("use_entities") is False:
+            properties["use_entities"] = []
+
+        if not properties.get("ignore_entities"):  # handle None and False
+            properties["ignore_entities"] = []
+        elif properties.get("ignore_entities") is True:
+            properties["ignore_entities"] = [entity for entity in entities]
+
+        return properties
+
+    def featurized_entities_for_intent(
+        self, intent: Dict[Text, Any], entities: List[Text]
+    ) -> Set[Text]:
+        intent_name = list(intent.keys())[0]
+        properties = intent.get(intent_name, {})
+        explicitly_included = isinstance(properties.get("use_entities"), list)
+
+        properties = self.set_default_intent_properties(properties, entities)
+
+        included_entities = set(properties.get("use_entities", [])).intersection(
+            set(entities)
+        )
+        excluded_entities = set(properties.get("ignore_entities", []))
+
+        # Only print warning for ambiguous configurations if entities were included explicitly.
+        ambiguous_entities = included_entities.intersection(excluded_entities)
+        if explicitly_included and ambiguous_entities:
+            warnings.warn(
+                f"Entities: '{ambiguous_entities}' are explicitly included and"
+                f" excluded for intent '{intent_name}'."
+                "Excluding takes precedence in this case. "
+                "Please resolve that ambiguity."
+            )
+
+        featurized_entities = included_entities - excluded_entities
+        return featurized_entities
 
     @staticmethod
     def collect_templates(
@@ -280,8 +327,8 @@ class Domain:
         store_entities_as_slots: bool = True,
     ) -> None:
 
-        self.intent_properties = self.collect_intent_properties(intents)
         self.entities = entities
+        self.full_intents = self.collect_intents(intents, self.entities)
         self.form_names = form_names
         self.slots = slots
         self.templates = templates
@@ -492,8 +539,10 @@ class Domain:
         intent_name = latest_message.intent.get("name")
 
         if intent_name:
-            for entity_name in self._get_featurized_entities(latest_message):
-                key = f"entity_{entity_name}"
+            for entity in self.full_intents.get(intent_name, {}).get(
+                "featurized_entities"
+            ):
+                key = f"entity_{entity}"
                 state_dict[key] = 1.0
 
         # Set all set slots with the featurization of the stored value
@@ -515,35 +564,6 @@ class Domain:
             state_dict[intent_id] = latest_message.intent.get("confidence", 1.0)
 
         return state_dict
-
-    def _get_featurized_entities(self, latest_message: UserUttered) -> Set[Text]:
-        intent_name = latest_message.intent.get("name")
-        intent_config = self.intent_config(intent_name)
-        entities = latest_message.entities
-        entity_names = {
-            entity["entity"] for entity in entities if "entity" in entity.keys()
-        }
-
-        # `use_entities` is either a list of explicitly included entities
-        # or `True` if all should be included
-        include = intent_config.get("use_entities", True)
-        included_entities = set(entity_names if include is True else include)
-        excluded_entities = set(intent_config.get("ignore_entities", []))
-        wanted_entities = included_entities - excluded_entities
-
-        # Only print warning for ambiguous configurations if entities were included
-        # explicitly.
-        explicitly_included = isinstance(include, list)
-        ambiguous_entities = included_entities.intersection(excluded_entities)
-        if explicitly_included and ambiguous_entities:
-            warnings.warn(
-                f"Entities: '{ambiguous_entities}' are explicitly included and"
-                f" excluded for intent '{intent_name}'."
-                "Excluding takes precedence in this case. "
-                "Please resolve that ambiguity."
-            )
-
-        return entity_names.intersection(wanted_entities)
 
     def get_prev_action_states(
         self, tracker: "DialogueStateTracker"
@@ -656,7 +676,7 @@ class Domain:
 
         return {
             "config": additional_config,
-            "intents": [{k: v} for k, v in self.intent_properties.items()],
+            "intents": [{k: v} for k, v in self.full_intents.items()],
             "entities": self.entities,
             "slots": self._slot_definitions(),
             "templates": self.templates,
@@ -717,11 +737,11 @@ class Domain:
 
     def intent_config(self, intent_name: Text) -> Dict[Text, Any]:
         """Return the configuration for an intent."""
-        return self.intent_properties.get(intent_name, {})
+        return self.full_intents.get(intent_name, {})
 
     @common_utils.lazy_property
     def intents(self):
-        return sorted(self.intent_properties.keys())
+        return sorted(self.full_intents.keys())
 
     @property
     def _slots_for_domain_warnings(self) -> List[Text]:
@@ -816,12 +836,12 @@ class Domain:
             ]
 
         def check_mappings(
-            intent_properties: Dict[Text, Dict[Text, Union[bool, List]]]
+            full_intents: Dict[Text, Dict[Text, Union[bool, List]]]
         ) -> List[Tuple[Text, Text]]:
             """Check whether intent-action mappings use proper action names."""
 
             incorrect = list()
-            for intent, properties in intent_properties.items():
+            for intent, properties in full_intents.items():
                 if "triggers" in properties:
                     triggered_action = properties.get("triggers")
                     if triggered_action not in self.action_names:
@@ -876,7 +896,7 @@ class Domain:
         duplicate_actions = get_duplicates(self.action_names)
         duplicate_slots = get_duplicates([s.name for s in self.slots])
         duplicate_entities = get_duplicates(self.entities)
-        incorrect_mappings = check_mappings(self.intent_properties)
+        incorrect_mappings = check_mappings(self.full_intents)
 
         if (
             duplicate_actions
