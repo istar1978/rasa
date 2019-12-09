@@ -212,7 +212,7 @@ class TrainingData:
         warnings.warn(
             "Function 'as_json()' is deprecated and will be removed "
             "in future versions. Use 'nlu_as_json()' instead.",
-            DeprecationWarning,
+            FutureWarning,
         )
 
         return self.nlu_as_json()
@@ -241,7 +241,7 @@ class TrainingData:
             "Function 'as_markdown()' is deprecated and will be removed "
             "in future versions. Use 'nlu_as_markdown()' and 'nlg_as_markdown()' "
             "instead.",
-            DeprecationWarning,
+            FutureWarning,
         )
 
         return self.nlu_as_markdown()

@@ -280,3 +280,17 @@ def lazy_property(function: Callable) -> Any:
         return getattr(self, attr_name)
 
     return _lazyprop
+
+
+import warnings
+
+# def _formatwarning(message, category, filename, lineno, line):
+#     raise NotImplementedError
+
+# def warn(message: Text, category = None, stacklevel: Optional[Text] = None, **kwargs):
+def raise_warn(message, category = None, stacklevel = 3, **kwargs):
+    # uncomment these lines once you've implemented a better _formatwarning
+    # og_format = warnings.formatwarning
+    # warnings.formatwarning = _formatwarning
+    warnings.warn(message, category=category, stacklevel=stacklevel, **kwargs)
+    # warnings.formatwarning = og_format 
