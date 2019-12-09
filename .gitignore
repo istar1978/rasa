@@ -84,3 +84,5 @@ events.db
 *.coverage*
 env
 venv
+.dir-locals.el
+.history

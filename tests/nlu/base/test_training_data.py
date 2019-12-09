@@ -48,7 +48,7 @@ def test_validation_is_throwing_exceptions(invalid_data):
 
 
 def test_luis_data():
-    td = training_data.load_data("data/examples/luis/demo-restaurants.json")
+    td = training_data.load_data("data/examples/luis/demo-restaurants_v5.json")
 
     assert not td.is_empty()
     assert len(td.entity_examples) == 8
@@ -290,7 +290,7 @@ def test_multiword_entities():
 def test_nonascii_entities():
     data = """
 {
-  "luis_schema_version": "2.0",
+  "luis_schema_version": "5.0",
   "utterances" : [
     {
       "text": "I am looking for a ßäæ ?€ö) item",
@@ -394,7 +394,7 @@ def cmp_dict_list(firsts, seconds):
             None,
         ),
         (
-            "data/examples/luis/demo-restaurants.json",
+            "data/examples/luis/demo-restaurants_v5.json",
             "data/test/luis_converted_to_rasa.json",
             "json",
             None,
@@ -539,7 +539,7 @@ def test_markdown_entity_regex():
 
 
 def test_get_file_format():
-    fformat = get_file_format("data/examples/luis/demo-restaurants.json")
+    fformat = get_file_format("data/examples/luis/demo-restaurants_v5.json")
 
     assert fformat == "json"
 
@@ -596,3 +596,46 @@ def test_section_value_with_delimiter():
         "data/test/markdown_single_sections/section_with_delimiter.md"
     )
     assert td_section_with_delimiter.entity_synonyms == {"10:00 am": "10:00"}
+
+
+def test_markdown_order():
+    r = MarkdownReader()
+
+    md = """## intent:z
+- i'm looking for a place to eat
+- i'm looking for a place in the [north](loc-direction) of town
+
+## intent:a
+- intent a
+- also very important
+"""
+
+    training_data = r.reads(md)
+    assert training_data.nlu_as_markdown() == md
+
+
+def test_dump_nlu_with_responses():
+    md = """## intent:greet
+- hey
+- howdy
+- hey there
+- hello
+- hi
+- good morning
+- good evening
+- dear sir
+
+## intent:chitchat/ask_name
+- What's your name?
+- What can I call you?
+
+## intent:chitchat/ask_weather
+- How's the weather?
+- Is it too hot outside?
+"""
+
+    r = MarkdownReader()
+    nlu_data = r.reads(md)
+
+    dumped = nlu_data.nlu_as_markdown()
+    assert dumped == md

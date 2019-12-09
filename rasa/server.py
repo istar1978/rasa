@@ -54,7 +54,14 @@ USE_LATEST_INPUT_CHANNEL_AS_OUTPUT_CHANNEL = "latest"
 
 
 class ErrorResponse(Exception):
-    def __init__(self, status, reason, message, details=None, help_url=None):
+    def __init__(
+        self,
+        status: int,
+        reason: Text,
+        message: Text,
+        details: Any = None,
+        help_url: Optional[Text] = None,
+    ) -> None:
         self.error_info = {
             "version": rasa.__version__,
             "status": "failure",
@@ -417,7 +424,8 @@ def create_app(
 
         return response.json(
             {
-                "model_file": model.get_latest_model(),
+                "model_file": app.agent.path_to_model_archive
+                or app.agent.model_directory,
                 "fingerprint": model.fingerprint_from_path(app.agent.model_directory),
                 "num_active_training_jobs": app.active_training_processes.value,
             }

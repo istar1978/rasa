@@ -59,7 +59,7 @@ class NaturalLanguageInterpreter:
 
 class RegexInterpreter(NaturalLanguageInterpreter):
     @staticmethod
-    def allowed_prefixes():
+    def allowed_prefixes() -> Text:
         return INTENT_MESSAGE_PREFIX
 
     @staticmethod
@@ -153,6 +153,16 @@ class RegexInterpreter(NaturalLanguageInterpreter):
             return None, 0.0, []
 
     async def parse(
+        self,
+        text: Text,
+        message_id: Optional[Text] = None,
+        tracker: DialogueStateTracker = None,
+    ) -> Dict[Text, Any]:
+        """Parse a text message."""
+
+        return self.synchronous_parse(text, message_id, tracker)
+
+    def synchronous_parse(
         self,
         text: Text,
         message_id: Optional[Text] = None,
@@ -274,7 +284,7 @@ class RasaNLUInterpreter(NaturalLanguageInterpreter):
 
         return result
 
-    def _load_interpreter(self):
+    def _load_interpreter(self) -> None:
         from rasa.nlu.model import Interpreter
 
         self.interpreter = Interpreter.load(self.model_directory)
