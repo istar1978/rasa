@@ -53,20 +53,15 @@ class CRFEntityExtractor(EntityExtractor):
         # how to create batches
         "batch_strategy": "balanced",  # string 'sequence' or 'balanced'
         # number of epochs
-        "epochs": 300,
+        "epochs": 100,
         # set random seed to any int to get reproducible results
         "random_seed": None,
-        # whether the loss should be normalized or not
-        "normalize_loss": False,
         # embedding parameters
         # default dense dimension used if no dense features are present
         "dense_dim": 512,
         # regularization parameters
         # the scale of L2 regularization
         "C2": 0.002,
-        # the scale of how critical the algorithm should be of minimizing the
-        # maximum similarity between embeddings of different labels
-        "C_emb": 0.8,
         # dropout rate for rnn
         "droprate": 0.2,
         # visualization of accuracy
@@ -124,7 +119,6 @@ class CRFEntityExtractor(EntityExtractor):
         self.batch_in_size = config["batch_size"]
         self.batch_in_strategy = config["batch_strategy"]
 
-        self.normalize_loss = config["normalize_loss"]
         self.epochs = config["epochs"]
 
         self.dense_dim = config["dense_dim"]
@@ -132,7 +126,6 @@ class CRFEntityExtractor(EntityExtractor):
         self.random_seed = self.component_config["random_seed"]
 
         self.C2 = config["C2"]
-        self.C_emb = config["C_emb"]
         self.droprate = config["droprate"]
         self.evaluate_every_num_epochs = config["evaluate_every_num_epochs"]
         if self.evaluate_every_num_epochs < 1:
@@ -193,15 +186,7 @@ class CRFEntityExtractor(EntityExtractor):
             metrics = self._build_tf_train_graph(session_data)
 
             # calculate overall loss
-            if self.normalize_loss:
-                loss = tf.add_n(
-                    [
-                        _loss / (tf.stop_gradient(_loss) + 1e-8)
-                        for _loss in metrics.loss.values()
-                    ]
-                )
-            else:
-                loss = tf.add_n(list(metrics.loss.values()))
+            loss = tf.add_n(list(metrics.loss.values()))
 
             # define which optimizer to use
             self._train_op = tf.train.AdamOptimizer().minimize(loss)
