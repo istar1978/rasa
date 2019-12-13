@@ -1,24 +1,19 @@
-import io
 import logging
 from collections import defaultdict
 
 import numpy as np
 import os
-import re
 import pickle
 import typing
 import scipy.sparse
-from typing import Any, Dict, Optional, Text, List, Union
+from typing import Any, Dict, Optional, Text, List
 
-from rasa.nlu import utils
 from rasa.nlu.config import RasaNLUModelConfig
 from rasa.nlu.featurizers.featurzier import Featurizer
 from rasa.nlu.training_data import Message, TrainingData
-import rasa.utils.io
 from rasa.nlu.constants import (
     MESSAGE_TOKENS_NAMES,
     MESSAGE_TEXT_ATTRIBUTE,
-    MESSAGE_RESPONSE_ATTRIBUTE,
     MESSAGE_VECTOR_SPARSE_FEATURE_NAMES,
     MESSAGE_SPACY_FEATURES_NAMES,
 )
@@ -92,7 +87,7 @@ class EntityFeaturizer(Featurizer):
     def __init__(
         self,
         component_config: Dict[Text, Any],
-        feature_id_dict: Dict[Text, Dict[Text, int]],
+        feature_id_dict: Optional[Dict[Text, Dict[Text, int]]] = None,
     ):
 
         super().__init__(component_config)
@@ -103,12 +98,7 @@ class EntityFeaturizer(Featurizer):
     def train(
         self, training_data: TrainingData, config: RasaNLUModelConfig, **kwargs: Any
     ) -> None:
-        features = []
-        for example in training_data.training_examples:
-            tokens = self._from_text_to_crf(example)
-            features.append(self._sentence_to_features(tokens))
-
-        self.feature_id_dict = self._create_feature_id_dict(features)
+        self.feature_id_dict = self._create_feature_id_dict(training_data)
 
         for example in training_data.training_examples:
             self._text_features_for_entities(example)
@@ -147,10 +137,14 @@ class EntityFeaturizer(Featurizer):
             MESSAGE_VECTOR_SPARSE_FEATURE_NAMES[MESSAGE_TEXT_ATTRIBUTE], features
         )
 
-    @staticmethod
     def _create_feature_id_dict(
-        features: List[List[Dict[Text, Any]]]
+        self, training_data: TrainingData
     ) -> Dict[Text, Dict[Text, int]]:
+        features = []
+        for example in training_data.training_examples:
+            tokens = self._from_text_to_crf(example)
+            features.append(self._sentence_to_features(tokens))
+
         # build vocab of features
         vocab_x = defaultdict(set)
         for sent_features in features:
