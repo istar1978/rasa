@@ -814,7 +814,10 @@ class EmbeddingIntentClassifier(EntityExtractor):
             a_pre, lm_mask_bool = (a, None)
 
         # transformer
-        a_transformed = self._create_tf_sequence(a_pre, mask)
+        if self.num_transformer_layers > 0:
+            a_transformed = self._create_tf_sequence(a_pre, mask)
+        else:
+            a_transformed = a_pre
 
         metrics = TrainingMetrics(loss={}, score={})
 
@@ -886,6 +889,9 @@ class EmbeddingIntentClassifier(EntityExtractor):
     def _train_entity_graph(
         self, a: "tf.Tensor", c: "tf.Tensor", mask: "tf.Tensor"
     ) -> Tuple["tf.Tensor", "tf.Tensor"]:
+        # TODO:
+        #   if only NER is used, but no cls_token we would remove the last token
+        #   from the sentence by mask_up_to_last
         mask_up_to_last = 1 - tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
         sequence_lengths = tf.cast(tf.reduce_sum(mask_up_to_last[:, :, 0], 1), tf.int32)
         sequence_lengths.set_shape([mask.shape[0]])
@@ -995,7 +1001,8 @@ class EmbeddingIntentClassifier(EntityExtractor):
         )
 
         # transformer
-        a = self._create_tf_sequence(a, mask)
+        if self.num_transformer_layers > 0:
+            a = self._create_tf_sequence(a, mask)
 
         if self.intent_classification:
             b = self.combine_sparse_dense_features(
@@ -1330,9 +1337,10 @@ class EmbeddingIntentClassifier(EntityExtractor):
             # rebuild the graph for prediction
             self._build_tf_pred_graph(session_data)
 
-            self.attention_weights = train_utils.extract_attention(
-                self.attention_weights
-            )
+            if self.attention_weights is not None:
+                self.attention_weights = train_utils.extract_attention(
+                    self.attention_weights
+                )
 
     def process(self, message: "Message", **kwargs: Any) -> None:
         """Return the most likely label and its similarity to the input."""
