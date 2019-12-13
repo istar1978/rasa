@@ -26,6 +26,7 @@ from rasa.nlu.featurizers.sparse_featurizer.count_vectors_featurizer import (
 )
 from rasa.nlu.featurizers.dense_featurizer.mitie_featurizer import MitieFeaturizer
 from rasa.nlu.featurizers.sparse_featurizer.regex_featurizer import RegexFeaturizer
+from rasa.nlu.featurizers.sparse_featurizer.entity_featurizer import EntityFeaturizer
 from rasa.nlu.featurizers.dense_featurizer.spacy_featurizer import SpacyFeaturizer
 
 from rasa.nlu.featurizers.dense_featurizer.pretrained_lm_featurizer import (
@@ -72,6 +73,7 @@ component_classes = [
     SpacyFeaturizer,
     MitieFeaturizer,
     RegexFeaturizer,
+    EntityFeaturizer,
     CountVectorsFeaturizer,
     PreTrainedLMFeaturizer,
     ConvertFeaturizer,
