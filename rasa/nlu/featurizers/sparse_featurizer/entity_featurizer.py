@@ -122,8 +122,9 @@ class EntityFeaturizer(Featurizer):
         # convert features into one-hot
         for token_idx, token in enumerate(features):
             for k, v in token.items():
-                feature_idx = self.feature_id_dict[k][str(v)]
-                vec[token_idx][feature_idx] = 1
+                if k in self.feature_id_dict and str(v) in self.feature_id_dict[k]:
+                    feature_idx = self.feature_id_dict[k][str(v)]
+                    vec[token_idx][feature_idx] = 1
 
         entity_features = scipy.sparse.coo_matrix(vec)
 

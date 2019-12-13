@@ -23,16 +23,13 @@ from rasa.nlu.constants import (
     MESSAGE_VECTOR_DENSE_FEATURE_NAMES,
     MESSAGE_ENTITIES_ATTRIBUTE,
     MESSAGE_VECTOR_SPARSE_FEATURE_NAMES,
+    CLS_TOKEN,
 )
 
 import tensorflow as tf
 
 
 logger = logging.getLogger(__name__)
-
-if typing.TYPE_CHECKING:
-    from sklearn_crfsuite import CRF
-    from spacy.tokens import Doc
 
 
 MESSAGE_BILOU_ENTITIES_ATTRIBUTE = "BILOU_entities"
@@ -82,7 +79,6 @@ class CRFEntityExtractor(EntityExtractor):
     def __init__(
         self,
         component_config: Optional[Dict[Text, Any]] = None,
-        ent_tagger: Optional["CRF"] = None,
         feature_id_dict: Optional[Dict[Text, Dict[int, Text]]] = None,
         inverted_tag_dict: Optional[Dict[int, Text]] = None,
         session: Optional["tf.Session"] = None,
@@ -328,7 +324,12 @@ class CRFEntityExtractor(EntityExtractor):
         )
         c = self.combine_sparse_dense_features(batch_data["tag_ids"], mask, "tag")
 
-        mask_up_to_last = 1 - tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
+        if self.cls_token_used:
+            mask_up_to_last = 1 - tf.cumprod(
+                1 - mask, axis=1, exclusive=True, reverse=True
+            )
+        else:
+            mask_up_to_last = mask
 
         sequence_lengths = tf.cast(tf.reduce_sum(mask_up_to_last[:, :, 0], 1), tf.int32)
         sequence_lengths.set_shape([mask.shape[0]])
@@ -392,7 +393,13 @@ class CRFEntityExtractor(EntityExtractor):
             batch_data["text_features"], mask, "text"
         )
 
-        mask_up_to_last = 1 - tf.cumprod(1 - mask, axis=1, exclusive=True, reverse=True)
+        if self.cls_token_used:
+            mask_up_to_last = 1 - tf.cumprod(
+                1 - mask, axis=1, exclusive=True, reverse=True
+            )
+        else:
+            mask_up_to_last = mask
+
         sequence_lengths = tf.cast(tf.reduce_sum(mask_up_to_last[:, :, 0], 1), tf.int32)
 
         # predict tagsx
@@ -522,6 +529,11 @@ class CRFEntityExtractor(EntityExtractor):
         tag_id_dict: Optional[Dict[Text, int]] = None,
     ) -> train_utils.SessionDataType:
         """Prepare data for training and create a SessionDataType object"""
+
+        self.cls_token_used = (
+            training_data[0].get(MESSAGE_TOKENS_NAMES[MESSAGE_TEXT_ATTRIBUTE])[-1]
+            == CLS_TOKEN
+        )
 
         X_sparse = []
         X_dense = []
