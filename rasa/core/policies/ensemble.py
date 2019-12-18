@@ -174,9 +174,7 @@ class PolicyEnsemble:
             except ImportError:
                 pass
 
-    def _persist_metadata(
-        self, path: Text
-    ) -> None:
+    def _persist_metadata(self, path: Text) -> None:
         """Persists the domain specification to storage."""
 
         # make sure the directory we persist exists
