@@ -576,21 +576,6 @@ class Agent:
             if type(p) == MemoizationPolicy:
                 p.toggle(activate)
 
-    def continue_training(
-        self, trackers: List[DialogueStateTracker], **kwargs: Any
-    ) -> None:
-        warnings.warn(
-            "Continue training will be removed in the next release. It won't be "
-            "possible to continue the training, you should probably retrain instead.",
-            FutureWarning,
-        )
-
-        if not self.is_core_ready():
-            raise AgentNotReady("Can't continue training without a policy ensemble.")
-
-        self.policy_ensemble.continue_training(trackers, self.domain, **kwargs)
-        self._set_fingerprint()
-
     def _max_history(self) -> int:
         """Find maximum max_history."""
 
@@ -780,7 +765,7 @@ class Agent:
                 "overwritten.".format(model_path)
             )
 
-    def persist(self, model_path: Text, dump_flattened_stories: bool = False) -> None:
+    def persist(self, model_path: Text) -> None:
         """Persists this agent into a directory for later loading and usage."""
 
         if dump_flattened_stories:
@@ -799,7 +784,7 @@ class Agent:
 
         self._clear_model_directory(model_path)
 
-        self.policy_ensemble.persist(model_path, dump_flattened_stories)
+        self.policy_ensemble.persist(model_path)
         self.domain.persist(os.path.join(model_path, DEFAULT_DOMAIN_PATH))
         self.domain.persist_specification(model_path)
 
